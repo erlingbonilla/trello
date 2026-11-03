@@ -1,0 +1,6 @@
+{
+  "name": "Tablero Logístico y Control de Picking",
+  "description": "Sistema tipo Trello para asignación y seguimiento de picking y despacho de órdenes OV, TR y OF con integración de catálogos y transacciones.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
