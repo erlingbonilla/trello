@@ -420,7 +420,10 @@ async function startServer() {
 
   app.post('/api/board/state', (req, res) => {
     if (Array.isArray(req.body?.cards)) {
-      sharedCards = req.body.cards;
+      // Protect server board: never let a newly connected client with an empty [] state overwrite existing server cards
+      if (req.body.cards.length > 0 || sharedCards.length === 0) {
+        sharedCards = req.body.cards;
+      }
     }
     if (Array.isArray(req.body?.audits)) {
       sharedAudits = req.body.audits;

@@ -358,6 +358,7 @@ export function getCards(): Card[] {
 
 export function saveCards(cards: Card[]) {
   safeSetStorage(STORAGE_KEYS.CARDS, JSON.stringify(cards));
+  if (!cards || cards.length === 0) return;
   try {
     fetch('/api/board/state', {
       method: 'POST',
