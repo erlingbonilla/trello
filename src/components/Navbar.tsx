@@ -73,6 +73,10 @@ export const Navbar: React.FC<NavbarProps> = ({
     despacho: { label: 'Despacho', badge: 'bg-slate-200 text-slate-800 border-slate-300' },
   };
 
+  const getRoleBadge = (role?: string) => {
+    return (role && roleLabels[role as Role]) || { label: role || 'Usuario', badge: 'bg-slate-100 text-slate-800 border-slate-200' };
+  };
+
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-slate-200/90 shadow-2xs backdrop-blur-md">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between gap-4">
@@ -222,10 +226,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               </div>
               <span
                 className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded border ${
-                  roleLabels[currentUser.role].badge
+                  getRoleBadge(currentUser?.role).badge
                 }`}
               >
-                {roleLabels[currentUser.role].label}
+                {getRoleBadge(currentUser?.role).label}
               </span>
             </div>
             <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
@@ -301,10 +305,10 @@ export const Navbar: React.FC<NavbarProps> = ({
                       </div>
                       <span
                         className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded border shrink-0 ${
-                          roleLabels[u.role].badge
+                          getRoleBadge(u?.role).badge
                         }`}
                       >
-                        {roleLabels[u.role].label}
+                        {getRoleBadge(u?.role).label}
                       </span>
                     </button>
                   );

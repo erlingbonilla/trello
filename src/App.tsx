@@ -179,10 +179,10 @@ export default function App() {
       // Filter by search query (order number, client, products)
       if (searchFilter.trim()) {
         const query = searchFilter.toLowerCase().trim();
-        const matchesOrder = card.orderNumber.includes(query);
-        const matchesClient = card.client.toLowerCase().includes(query);
-        const matchesProd = card.items.some(
-          (i: CardItem) => i.productCode.toLowerCase().includes(query) || i.description.toLowerCase().includes(query)
+        const matchesOrder = String(card.orderNumber || '').includes(query);
+        const matchesClient = String(card.client || '').toLowerCase().includes(query);
+        const matchesProd = (card.items || []).some(
+          (i: CardItem) => String(i?.productCode || '').toLowerCase().includes(query) || String(i?.description || '').toLowerCase().includes(query)
         );
         if (!matchesOrder && !matchesClient && !matchesProd) return false;
       }
@@ -193,7 +193,7 @@ export default function App() {
       }
 
       // Filter by label
-      if (labelFilter !== 'ALL' && !card.labels.includes(labelFilter)) {
+      if (labelFilter !== 'ALL' && !(card.labels || []).includes(labelFilter)) {
         return false;
       }
 
@@ -377,8 +377,8 @@ export default function App() {
                 const pickerCards = filteredCards.filter(
                   c =>
                     c.status === 'picking' &&
-                    c.assignedPickerIds.includes(picker.id) &&
-                    !(c.items.length > 0 && c.items.every(i => i.isFinished || (i.pickedQty || 0) >= i.requestedQty))
+                    (c.assignedPickerIds || []).includes(picker.id) &&
+                    !((c.items || []).length > 0 && (c.items || []).every(i => i.isFinished || (i.pickedQty || 0) >= i.requestedQty))
                 );
 
                 return (
@@ -409,8 +409,8 @@ export default function App() {
                   user={despachoUser}
                   cards={filteredCards.filter(
                     c =>
-                      (c.status === 'despacho' || c.items.some(i => (i.pickedQty || 0) > (i.dispatchedQty || 0))) &&
-                      c.items.some(i => (i.pickedQty || 0) > (i.dispatchedQty || 0))
+                      (c.status === 'despacho' || (c.items || []).some(i => (i.pickedQty || 0) > (i.dispatchedQty || 0))) &&
+                      (c.items || []).some(i => (i.pickedQty || 0) > (i.dispatchedQty || 0))
                   )}
                   currentUser={currentUser}
                   allUsers={users}

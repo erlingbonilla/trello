@@ -43,20 +43,26 @@ export const CardView: React.FC<CardViewProps> = ({
       border: 'border-purple-800',
       typeBadge: 'bg-purple-900/60 text-white',
     },
-  }[card.type];
+  }[card.type] || {
+    bg: 'bg-emerald-600',
+    border: 'border-emerald-700',
+    typeBadge: 'bg-emerald-800/60 text-white',
+  };
 
   // Codes finished calculation (for OV: finished / total - pending)
-  const stItems = card.items.filter(item => item.location === 'ST');
-  const itemsToCount = stItems.length > 0 ? stItems : card.items;
+  const items = card.items || [];
+  const stItems = items.filter(item => item && item.location === 'ST');
+  const itemsToCount = stItems.length > 0 ? stItems : items;
   const totalCodes = itemsToCount.length;
   const finishedCodes = itemsToCount.filter(item => 
-    isDespachoCard ? item.isDispatched : item.isFinished
+    isDespachoCard ? (item.isDispatched || (item.dispatchedQty || 0) >= item.requestedQty) : (item.isFinished || (item.pickedQty || 0) >= item.requestedQty)
   ).length;
-  const pendingCodes = totalCodes - finishedCodes;
+  const pendingCodes = Math.max(0, totalCodes - finishedCodes);
   const codeRatioStr = `${finishedCodes}/${totalCodes}-${pendingCodes}`;
 
   // Filter items to show ONLY pending products (exclude finished ones from card preview)
-  const pendingItems = card.items.filter(item => {
+  const pendingItems = items.filter(item => {
+    if (!item) return false;
     if (isDespachoCard) {
       return (item.pickedQty || 0) > (item.dispatchedQty || 0);
     }
@@ -67,7 +73,7 @@ export const CardView: React.FC<CardViewProps> = ({
   const remainingPendingCount = Math.max(0, pendingItems.length - 3);
 
   // Assigned picker objects
-  const assignedPickers = allUsers.filter(u => card.assignedPickerIds.includes(u.id));
+  const assignedPickers = allUsers.filter(u => (card.assignedPickerIds || []).includes(u.id));
 
   return (
     <div
