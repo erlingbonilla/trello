@@ -248,13 +248,9 @@ async function startServer() {
       //    OV -> PI / DL
       //    TR -> PIREQ / REQDEL
       //    OF -> PIPROD / TRPROD
-      const orderTxs = cachedSyncResult.transactions.filter((t: any) => {
+      const candidates = cachedTxOrderMap.get(cleanTarget) || [];
+      const orderTxs = candidates.filter((t: any) => {
         if (!isSTLocation(t.bodega)) return false;
-
-        const cleanT = String(t.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
-        const cleanSap = String(t.sapRef || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
-        const matchesOrder = cleanT === cleanTarget || cleanSap === cleanTarget || t.orderNumber === card.orderNumber || (t.sapRef && t.sapRef.includes(cleanTarget));
-        if (!matchesOrder) return false;
 
         const sap = String(t.sapRef || '').trim().toUpperCase();
         const txType = String(t.transactionType || '').trim().toUpperCase();
@@ -666,12 +662,12 @@ async function startServer() {
     }
   }, 180000); // 3 minutes
 
-  // Initial background sync
+  // Initial background sync: delayed 12 seconds so server boots instantly and serves all HTTP requests
   setTimeout(() => {
     performFolderSync().catch(err => {
       console.warn('Background initial OneDrive sync deferred:', err.message);
     });
-  }, 1000);
+  }, 12000);
 
   const isProd = process.env.NODE_ENV === 'production';
   const distPath = path.resolve('dist');
@@ -691,7 +687,7 @@ async function startServer() {
   }
 
   if (hasDist) {
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, { index: false }));
     app.get('*', (_req, res) => {
       res.sendFile(indexHtmlPath);
     });
@@ -719,8 +715,8 @@ async function startServer() {
     });
   }
 
-  app.listen(port, () => {
-    console.log(`Logistics Server & Vite running on port ${port}`);
+  app.listen(Number(port), '0.0.0.0', () => {
+    console.log(`Logistics Server running on http://0.0.0.0:${port}`);
   });
 }
 

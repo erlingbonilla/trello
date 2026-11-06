@@ -62,7 +62,7 @@ export default function App() {
       });
     };
 
-    const interval = setInterval(syncState, 3500);
+    const interval = setInterval(syncState, 10000);
     window.addEventListener('focus', syncState);
 
     return () => {
