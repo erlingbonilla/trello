@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import express from 'express';
-import { createServer as createViteServer } from 'vite';
+import { createServer as createViteServer, build as viteBuild } from 'vite';
 import { resolveOneDriveFolderContext } from './src/services/onedriveFolderSync';
 import { isWithinSyncSchedule, getSyncScheduleInfo } from './src/utils/syncSchedule';
 import { isSTLocation } from './src/data/bodegasCatalog';
@@ -676,21 +676,46 @@ async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
   const distPath = path.resolve('dist');
   const indexHtmlPath = path.join(distPath, 'index.html');
-  const hasDist = fs.existsSync(indexHtmlPath);
+  let hasDist = fs.existsSync(indexHtmlPath);
 
-  if (!isProd || !hasDist) {
-    if (isProd && !hasDist) {
-      console.warn(`[Server] dist/index.html no encontrada en ${distPath}. Montando Vite middleware dinámicamente...`);
+  // If in production and dist/index.html is missing (e.g. Render build command didn't run vite build), auto-build!
+  if (isProd && !hasDist) {
+    console.log('[Server] dist/index.html no encontrada en producción. Compilando aplicación con Vite build...');
+    try {
+      await viteBuild();
+      hasDist = fs.existsSync(indexHtmlPath);
+      console.log('[Server] Compilación automática de producción completada con éxito.');
+    } catch (buildErr: any) {
+      console.error('[Server] Falló compilación automática de Vite:', buildErr.message);
     }
+  }
+
+  if (hasDist) {
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(indexHtmlPath);
+    });
+  } else {
+    // Development or fallback Vite middleware mode
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(indexHtmlPath);
+
+    // Critical: transform and return index.html for any unhandled GET route so requests never hang
+    app.get('*', async (req, res, next) => {
+      try {
+        const url = req.originalUrl;
+        let template = fs.readFileSync(path.resolve('index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e: any) {
+        if (vite.ssrFixStacktrace) {
+          vite.ssrFixStacktrace(e);
+        }
+        next(e);
+      }
     });
   }
 
