@@ -1,7 +1,10 @@
+import fs from 'fs';
+import path from 'path';
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { resolveOneDriveFolderContext } from './src/services/onedriveFolderSync';
 import { isWithinSyncSchedule, getSyncScheduleInfo } from './src/utils/syncSchedule';
+import { isSTLocation } from './src/data/bodegasCatalog';
 
 async function startServer() {
   const app = express();
@@ -9,25 +12,74 @@ async function startServer() {
 
   app.use(express.json({ limit: '50mb' }));
 
-  // In-memory cache for OneDrive synced data
+  // In-memory cache for OneDrive synced data & O(1) fast indexed maps
   let cachedSyncResult: any = null;
+  let cachedLiOrderMap = new Map<string, any[]>();
+  let cachedTxOrderMap = new Map<string, any[]>();
+  let cachedProductDescMap = new Map<string, string>();
   let isSyncing = false;
+  let syncPromise: Promise<any> | null = null;
+
+  const rebuildIndexes = (result: any) => {
+    if (!result) return;
+    const liMap = new Map<string, any[]>();
+    const prodDescMap = new Map<string, string>();
+    (result.liRecords || []).forEach((r: any) => {
+      const k = String(r.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      if (k && k !== '000000000') {
+        if (!liMap.has(k)) liMap.set(k, []);
+        liMap.get(k)!.push(r);
+      }
+      const rawProd = String(r.productCode || '').trim();
+      const cleanProd = rawProd.replace(/^0+/, '').toUpperCase();
+      if (cleanProd && r.description && !prodDescMap.has(cleanProd)) {
+        prodDescMap.set(cleanProd, String(r.description).trim());
+      }
+    });
+    cachedLiOrderMap = liMap;
+    cachedProductDescMap = prodDescMap;
+
+    const txMap = new Map<string, any[]>();
+    (result.transactions || []).forEach((t: any) => {
+      const cleanT = String(t.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      if (cleanT && cleanT !== '000000000') {
+        if (!txMap.has(cleanT)) txMap.set(cleanT, []);
+        txMap.get(cleanT)!.push(t);
+      }
+      const cleanSap = String(t.sapRef || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      if (cleanSap && cleanSap !== '000000000' && cleanSap !== cleanT) {
+        if (!txMap.has(cleanSap)) txMap.set(cleanSap, []);
+        txMap.get(cleanSap)!.push(t);
+      }
+    });
+    cachedTxOrderMap = txMap;
+  };
+
+  const getProductDesc = (code: string, fallback: string): string => {
+    const clean = String(code || '').replace(/^0+/, '').toUpperCase();
+    return cachedProductDescMap.get(clean) || fallback;
+  };
 
   const performFolderSync = async (folderUrl?: string) => {
-    if (isSyncing) return cachedSyncResult;
-    isSyncing = true;
-    try {
-      const url =
-        folderUrl ||
-        'https://1drv.ms/f/c/a97927f4218d75aa/IgCbdjPW2zZxQaUGss9bS2uwAcCLWIYQb6IgbAJmCI0lvZw?e=LmSKmD';
-      console.log('Iniciando resolveOneDriveFolderContext:', url);
-      const result = await resolveOneDriveFolderContext(url);
-      cachedSyncResult = result;
-      console.log(`Sincronización completada: ${result.liCount} órdenes _li, ${result.trCount + result.prodCount} transacciones.`);
-      return result;
-    } finally {
-      isSyncing = false;
-    }
+    if (syncPromise) return syncPromise;
+    const url =
+      folderUrl ||
+      'https://1drv.ms/f/c/a97927f4218d75aa/IgCbdjPW2zZxQaUGss9bS2uwAcCLWIYQb6IgbAJmCI0lvZw?e=LmSKmD';
+    syncPromise = (async () => {
+      isSyncing = true;
+      try {
+        console.log('Iniciando resolveOneDriveFolderContext:', url);
+        const result = await resolveOneDriveFolderContext(url);
+        cachedSyncResult = result;
+        rebuildIndexes(result);
+        console.log(`Sincronización completada: ${result.liCount} órdenes _li (${cachedLiOrderMap.size} únicas), ${result.trCount + result.prodCount} transacciones.`);
+        return result;
+      } finally {
+        isSyncing = false;
+        syncPromise = null;
+      }
+    })();
+    return syncPromise;
   };
 
   // Status endpoint
@@ -52,42 +104,345 @@ async function startServer() {
     });
   });
 
-  // Fast order lookup endpoint from OneDrive cache with its matching SAP transactions
+  // Fast O(1) order lookup endpoint from indexed OneDrive cache
   app.get('/api/onedrive/order/:orderNumber', (req, res) => {
     const targetOrder = String(req.params.orderNumber).trim();
-    if (!cachedSyncResult || !cachedSyncResult.liRecords) {
+    if (!cachedSyncResult) {
       return res.status(404).json({ success: false, message: 'OneDrive aún no sincronizado en servidor.' });
     }
 
     const cleanTarget = targetOrder.replace(/\D/g, '').slice(-9).padStart(9, '0');
-    const matches = cachedSyncResult.liRecords.filter((r: any) => {
-      const cleanR = String(r.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
-      return cleanR === cleanTarget || r.orderNumber === targetOrder;
-    });
+    const matches = cachedLiOrderMap.get(cleanTarget) || [];
+    const txMatches = cachedTxOrderMap.get(cleanTarget) || [];
 
-    if (matches.length === 0) {
-      return res.status(404).json({ success: false, message: `Orden #${targetOrder} no encontrada en _li.` });
+    if (matches.length > 0) {
+      return res.json({
+        success: true,
+        orderNumber: targetOrder,
+        client: matches[0].client,
+        items: matches,
+        transactions: txMatches,
+      });
     }
 
-    const txMatches = (cachedSyncResult.transactions || []).filter((t: any) => {
-      const cleanT = String(t.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
-      return cleanT === cleanTarget || t.orderNumber === targetOrder;
+    // If not found in _li, check if found in transactions from location ST with valid prefix (ITR, SO, WO)
+    const validStTxs = txMatches.filter((t: any) => {
+      if (!isSTLocation(t.bodega)) return false;
+      const sap = String(t.sapRef || '').trim().toUpperCase();
+      const txType = String(t.transactionType || '').trim().toUpperCase();
+      const isTR = sap.includes('ITR') && (txType === 'PIREQ' || txType === 'REQDEL');
+      const isOV = sap.includes('SO') && (txType === 'PI' || txType === 'DL');
+      const isOF = sap.includes('WO') && (txType === 'PIPROD' || txType === 'TRPROD');
+      return isTR || isOV || isOF;
     });
 
-    return res.json({
-      success: true,
-      orderNumber: targetOrder,
-      client: matches[0].client,
-      items: matches,
-      transactions: txMatches,
-    });
+    if (validStTxs.length > 0) {
+      const prodMap = new Map<string, any>();
+      validStTxs.forEach((t: any) => {
+        const rawCode = String(t.productCode || '').trim();
+        const code = /^\d+$/.test(rawCode) && rawCode.length < 10 ? rawCode.padStart(10, '0') : rawCode;
+        if (!code) return;
+        const delta = typeof t.cantDelta === 'number' ? t.cantDelta : parseFloat(String(t.cantDelta).replace(',', '.')) || 0;
+        const realDesc = getProductDesc(code, `PRODUCTO ${code} (${t.uom || 'UND'}) - ${t.bodega || 'ST'}`);
+        if (delta < 0) {
+          const qty = Math.abs(delta);
+          const existing = prodMap.get(code);
+          if (existing) {
+            existing.requestedQty += qty;
+          } else {
+            prodMap.set(code, {
+              orderNumber: cleanTarget,
+              client: `TRASLADO BODEGA ST (${t.bodega || '600'})`,
+              productCode: code,
+              description: realDesc,
+              requestedQty: qty,
+              bodegaCode: t.bodega || '600',
+            });
+          }
+        }
+      });
+
+      if (prodMap.size === 0) {
+        validStTxs.forEach((t: any) => {
+          const rawCode = String(t.productCode || '').trim();
+          const code = /^\d+$/.test(rawCode) && rawCode.length < 10 ? rawCode.padStart(10, '0') : rawCode;
+          if (!code) return;
+          const qty = Math.abs(t.cantDelta) || t.finalQty || 1;
+          const realDesc = getProductDesc(code, `PRODUCTO ${code} (${t.uom || 'UND'}) - ${t.bodega || 'ST'}`);
+          const existing = prodMap.get(code);
+          if (!existing) {
+            prodMap.set(code, {
+              orderNumber: cleanTarget,
+              client: `TRASLADO BODEGA ST (${t.bodega || '600'})`,
+              productCode: code,
+              description: realDesc,
+              requestedQty: qty,
+              bodegaCode: t.bodega || '600',
+            });
+          }
+        });
+      }
+
+      const derivedItems = Array.from(prodMap.values());
+      const firstClient = `TRASLADO BODEGA ST (${validStTxs[0]?.bodega || '600'})`;
+
+      return res.json({
+        success: true,
+        orderNumber: targetOrder,
+        client: firstClient,
+        items: derivedItems,
+        transactions: validStTxs,
+      });
+    }
+
+    return res.status(404).json({ success: false, message: `Orden #${targetOrder} no encontrada en _li ni en transacciones WMS de ubicación ST.` });
   });
 
-  // Shared multi-device board state in server memory (instant sync between phones & PCs)
+  // Shared multi-device board state in server memory & persisted to disk
+  const boardCacheFile = path.resolve('.cache/board_state.json');
   let sharedCards: any[] = [];
   let sharedAudits: any[] = [];
 
+  const loadBoardFromDisk = () => {
+    try {
+      if (fs.existsSync(boardCacheFile)) {
+        const raw = fs.readFileSync(boardCacheFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.cards)) sharedCards = parsed.cards;
+        if (Array.isArray(parsed.audits)) sharedAudits = parsed.audits;
+      }
+    } catch (e) {
+      console.warn('Could not load board cache:', e);
+    }
+  };
+
+  const saveBoardToDisk = () => {
+    try {
+      const dir = path.dirname(boardCacheFile);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(boardCacheFile, JSON.stringify({ cards: sharedCards, audits: sharedAudits }), 'utf8');
+    } catch (e) {
+      console.warn('Could not save board cache:', e);
+    }
+  };
+
+  loadBoardFromDisk();
+
+  // If board is empty on start, seed the 7 TR cards requested by user
+  if (sharedCards.length === 0) {
+    const trOrders = ['200064501', '200064502', '200064503', '200064505', '200064506', '200064507', '200064508'];
+    sharedCards = trOrders.map((ord) => ({
+      id: `card_${Date.now()}_${ord}`,
+      type: 'TR',
+      orderNumber: ord,
+      client: 'TRASLADO INTERNO ENTRE BODEGAS',
+      assignedPickerIds: ['picker_miguel'],
+      labels: ['traslado'],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      isMulti: false,
+      status: 'picking',
+      items: [{
+        id: `item_${ord}_0`,
+        productCode: 'TR-ITEM-01',
+        description: `MATERIAL GENERAL TR #${ord}`,
+        requestedQty: 10,
+        pickedQty: 0,
+        dispatchedQty: 0,
+        bodegaCode: '600',
+        location: 'ST',
+        isFinished: false,
+        isDispatched: false,
+      }],
+    }));
+    saveBoardToDisk();
+  }
+
+  const reconcileCardsWithOneDrive = () => {
+    if (!cachedSyncResult || !cachedSyncResult.transactions || sharedCards.length === 0) return;
+
+    sharedCards.forEach((card: any) => {
+      const cleanTarget = String(card.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+
+      // Strict filter:
+      // 1. Only transactions in location ST
+      // 2. Order number matches
+      // 3. SAP prefix: OV -> SO, TR -> ITR, OF -> WO
+      // 4. Transaction type:
+      //    OV -> PI / DL
+      //    TR -> PIREQ / REQDEL
+      //    OF -> PIPROD / TRPROD
+      const orderTxs = cachedSyncResult.transactions.filter((t: any) => {
+        if (!isSTLocation(t.bodega)) return false;
+
+        const cleanT = String(t.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+        const cleanSap = String(t.sapRef || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+        const matchesOrder = cleanT === cleanTarget || cleanSap === cleanTarget || t.orderNumber === card.orderNumber || (t.sapRef && t.sapRef.includes(cleanTarget));
+        if (!matchesOrder) return false;
+
+        const sap = String(t.sapRef || '').trim().toUpperCase();
+        const txType = String(t.transactionType || '').trim().toUpperCase();
+
+        if (card.type === 'OV') {
+          if (!sap.includes('SO')) return false;
+          return txType === 'PI' || txType === 'DL';
+        } else if (card.type === 'TR') {
+          if (!sap.includes('ITR')) return false;
+          return txType === 'PIREQ' || txType === 'REQDEL';
+        } else if (card.type === 'OF') {
+          if (!sap.includes('WO')) return false;
+          return txType === 'PIPROD' || txType === 'TRPROD';
+        }
+        return false;
+      });
+
+      // Synchronize items with real WMS transactions:
+      if (orderTxs.length > 0) {
+        orderTxs.forEach((t: any) => {
+          const rawCode = String(t.productCode || '').trim();
+          const code = /^\d+$/.test(rawCode) && rawCode.length < 10 ? rawCode.padStart(10, '0') : rawCode;
+          if (!code) return;
+          const delta = typeof t.cantDelta === 'number' ? t.cantDelta : parseFloat(String(t.cantDelta).replace(',', '.')) || 0;
+          const realDesc = getProductDesc(code, `PRODUCTO ${code} (${t.uom || 'UND'}) - ${t.bodega || 'ST'}`);
+          if (delta < 0) {
+            const qty = Math.abs(delta);
+            const existingItem = card.items.find((it: any) => {
+              const itCode = String(it.productCode || '').replace(/^0+/, '').toUpperCase();
+              const cCode = code.replace(/^0+/, '').toUpperCase();
+              return itCode === cCode;
+            });
+            if (existingItem) {
+              existingItem.requestedQty = Math.max(existingItem.requestedQty, qty);
+              if (!existingItem.description || existingItem.description.startsWith('PRODUCTO ') || existingItem.description.includes('ITEM')) {
+                existingItem.description = realDesc;
+              }
+            } else {
+              card.items.push({
+                id: `item_${cleanTarget}_${code}`,
+                productCode: code,
+                description: realDesc,
+                requestedQty: qty,
+                pickedQty: 0,
+                dispatchedQty: 0,
+                bodegaCode: t.bodega || '600',
+                location: 'ST',
+                isFinished: false,
+                isDispatched: false,
+              });
+            }
+          }
+        });
+
+        // Also update descriptions for any existing items on the card
+        card.items.forEach((it: any) => {
+          if (!it.description || it.description.startsWith('PRODUCTO ') || it.description.includes('ITEM')) {
+            it.description = getProductDesc(it.productCode, it.description);
+          }
+        });
+
+        // Remove placeholder items if real products exist
+        if (card.items.length > 1) {
+          card.items = card.items.filter((it: any) => !it.productCode.includes('ITEM'));
+        }
+      }
+
+      // Calculate picking & dispatch progress for each item
+      card.items.forEach((item: any) => {
+        const itemCodeClean = String(item.productCode || '').replace(/^0+/, '').toUpperCase();
+        const prodTxs = orderTxs.filter((t: any) => {
+          const tCodeClean = String(t.productCode || '').replace(/^0+/, '').toUpperCase();
+          return tCodeClean === itemCodeClean || t.productCode === item.productCode;
+        });
+
+        let pickedTotal = 0;
+        let dispatchedTotal = 0;
+
+        if (card.type === 'OV') {
+          // OV: ONLY PI (cantDelta < 0) for picking, ONLY DL (cantDelta < 0) for dispatch
+          prodTxs.forEach((t: any) => {
+            if (t.transactionType === 'PI' && t.cantDelta < 0) {
+              pickedTotal += Math.abs(t.cantDelta);
+            }
+            if (t.transactionType === 'DL' && t.cantDelta < 0) {
+              dispatchedTotal += Math.abs(t.cantDelta);
+            }
+          });
+        } else if (card.type === 'TR') {
+          // TR: ONLY PIREQ (cantDelta < 0) for picking, ONLY REQDEL (cantDelta < 0) for dispatch
+          prodTxs.forEach((t: any) => {
+            if (t.transactionType === 'PIREQ' && t.cantDelta < 0) {
+              pickedTotal += Math.abs(t.cantDelta);
+            }
+            if (t.transactionType === 'REQDEL' && t.cantDelta < 0) {
+              dispatchedTotal += Math.abs(t.cantDelta);
+            }
+          });
+        } else if (card.type === 'OF') {
+          // OF: ONLY PIPROD (cantDelta < 0) for picking, ONLY TRPROD (cantDelta < 0) for dispatch
+          prodTxs.forEach((t: any) => {
+            if (t.transactionType === 'PIPROD' && t.cantDelta < 0) {
+              pickedTotal += Math.abs(t.cantDelta);
+            }
+            if (t.transactionType === 'TRPROD' && t.cantDelta < 0) {
+              dispatchedTotal += Math.abs(t.cantDelta);
+            }
+          });
+        }
+
+        item.pickedQty = pickedTotal;
+        item.dispatchedQty = dispatchedTotal;
+        item.isFinished = item.requestedQty > 0 && pickedTotal >= item.requestedQty;
+        item.isDispatched = item.requestedQty > 0 && dispatchedTotal >= item.requestedQty;
+      });
+
+      // Update card pickers from employee in transactions ONLY if card has no assigned pickers
+      if (orderTxs.length > 0 && (!card.assignedPickerIds || card.assignedPickerIds.length === 0)) {
+        const empName = String(orderTxs[0].employeeName || '').toLowerCase();
+        if (empName.includes('hugo')) {
+          card.assignedPickerIds = ['picker_hugo'];
+        } else if (empName.includes('miguel')) {
+          card.assignedPickerIds = ['picker_miguel'];
+        } else if (empName.includes('ricardo')) {
+          card.assignedPickerIds = ['picker_ricardo'];
+        }
+      }
+
+      // Check card completion / status
+      const allDispatched = card.items.length > 0 && card.items.every((it: any) => it.isDispatched || (it.dispatchedQty || 0) >= it.requestedQty);
+      const allPicked = card.items.length > 0 && card.items.every((it: any) => it.isFinished || (it.pickedQty || 0) >= it.requestedQty);
+
+      if (allDispatched) {
+        card.status = 'completed';
+      } else if (allPicked) {
+        card.status = 'despacho';
+      } else {
+        card.status = 'picking';
+      }
+    });
+
+    // Deduplicate sharedCards by order number + type
+    const cardMap = new Map<string, any>();
+    sharedCards.forEach((c: any) => {
+      const cleanOrd = String(c.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      const key = `${c.type}_${cleanOrd}`;
+      const existing = cardMap.get(key);
+      if (!existing) {
+        cardMap.set(key, c);
+      } else {
+        const cTime = new Date(c.updatedAt).getTime();
+        const eTime = new Date(existing.updatedAt).getTime();
+        if (cTime >= eTime) {
+          cardMap.set(key, c);
+        }
+      }
+    });
+    sharedCards = Array.from(cardMap.values());
+
+    saveBoardToDisk();
+  };
+
   app.get('/api/board/state', (_req, res) => {
+    reconcileCardsWithOneDrive();
     return res.json({ success: true, cards: sharedCards, audits: sharedAudits });
   });
 
@@ -98,6 +453,8 @@ async function startServer() {
     if (Array.isArray(req.body?.audits)) {
       sharedAudits = req.body.audits;
     }
+    reconcileCardsWithOneDrive();
+    saveBoardToDisk();
     return res.json({ success: true, cards: sharedCards, audits: sharedAudits });
   });
 
@@ -112,7 +469,8 @@ async function startServer() {
     );
     const matched = cachedSyncResult.transactions.filter((t: any) => {
       const cleanT = String(t.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
-      return cleanSet.has(cleanT) || orderNumbers.includes(t.orderNumber);
+      const cleanSap = String(t.sapRef || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      return cleanSet.has(cleanT) || cleanSet.has(cleanSap) || orderNumbers.includes(t.orderNumber);
     });
     return res.json({ success: true, transactions: matched });
   });
@@ -166,9 +524,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static('dist'));
+    const distPath = path.resolve('dist');
+    app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      res.sendFile('dist/index.html', { root: '.' });
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 

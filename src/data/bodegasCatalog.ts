@@ -78,7 +78,7 @@ export const INITIAL_BODEGAS: BodegaCatalogEntry[] = [
   { code: '628', name: 'CONSIGNACION CLESA 2021-2022', location: 'ST' },
   { code: '95', name: 'Bodega promociones mayoreo', location: 'ST' },
   { code: '98', name: 'ABodega de liquidación FB', location: 'FB' },
-  { code: '99', name: 'IMPORTACIONES', location: 'ST' },
+  { code: '99', name: 'IMPORTACIONES', location: 'OTRA' },
   { code: 'Aeroman', name: 'Aeroman', location: 'ST' },
   { code: 'AV', name: 'AVERIAS FLOR BLANCA', location: 'ST' },
   { code: 'AVST', name: 'avería santo tomas', location: 'ST' },
@@ -132,7 +132,7 @@ export function getBodegaLocation(bodegaCode: string, catalog: BodegaCatalogEntr
   // If starts with 4 (SM)
   if (cleanCode.startsWith('4') || cleanCode.includes(' SM') || cleanCode.includes('SAN MIGUEL')) return 'SM';
 
-  return 'ST';
+  return 'OTRA';
 }
 
 export function isSTLocation(bodegaCode: string, catalog: BodegaCatalogEntry[] = INITIAL_BODEGAS): boolean {

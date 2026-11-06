@@ -157,19 +157,49 @@ export async function resolveOneDriveFolderContext(
     }
   }
 
-  // 5. Download and parse _tr
+// Helper to ensure sheet['!ref'] covers all populated cell coordinates
+function fixSheetRef(sheet: XLSX.WorkSheet) {
+  const cellKeys = Object.keys(sheet).filter(k => !k.startsWith('!'));
+  let minR = Infinity, maxR = 0, minC = Infinity, maxC = 0;
+  for (const key of cellKeys) {
+    const match = key.match(/^([A-Z]+)([0-9]+)$/);
+    if (!match) continue;
+    const colStr = match[1];
+    const rowNum = parseInt(match[2], 10) - 1;
+    let colNum = 0;
+    for (let i = 0; i < colStr.length; i++) {
+      colNum = colNum * 26 + (colStr.charCodeAt(i) - 64);
+    }
+    colNum -= 1;
+    if (rowNum < minR) minR = rowNum;
+    if (rowNum > maxR) maxR = rowNum;
+    if (colNum < minC) minC = colNum;
+    if (colNum > maxC) maxC = colNum;
+  }
+  if (minR !== Infinity) {
+    sheet['!ref'] = XLSX.utils.encode_range({
+      s: { r: minR, c: minC },
+      e: { r: maxR, c: maxC },
+    });
+  }
+}
+
+  // 5. Download and parse _tr (historical transactions)
   if (trFile) {
     try {
       const buffer = await downloadFile(trFile.ServerRelativeUrl);
       const wb = XLSX.read(buffer, { type: 'buffer' });
       const sheetName = wb.SheetNames[0];
       const sheet = wb.Sheets[sheetName];
+      fixSheetRef(sheet);
       const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
       jsonRows.forEach((row, idx) => {
         const sapRef = String(row['Referencia SAP'] || row['Ref SAP'] || '').trim();
-        const productCode = normalizeProductCode(row['Código de Producto'] || row['Codigo de Producto'] || row['Producto'] || '');
-        const rawDelta = row['Cant. Delta'] || row['Delta'] || '0';
+        const productCode = normalizeProductCode(
+          row['Código de Producto'] || row['Codigo de Producto'] || row['Producto #'] || row['Producto'] || ''
+        );
+        const rawDelta = row['Cant. Delta'] || row['Cant. delta'] || row['Delta'] || '0';
         const cantDelta = parseFloat(String(rawDelta).replace(',', '.')) || 0;
         const txType = String(row['Tipo de transacción'] || row['Tipo de transaccion'] || '').trim().toUpperCase();
 
@@ -178,8 +208,8 @@ export async function resolveOneDriveFolderContext(
             id: `tr_${Date.now()}_${idx}`,
             source: '_tr',
             bodega: String(row['Bodega'] || '600').trim(),
-            origenUbicacion: String(row['Ubicación Origen'] || '').trim(),
-            ubicacion: String(row['Ubicación'] || '').trim(),
+            origenUbicacion: String(row['Ubicación Origen'] || row['Ubicacion Origen'] || row['Fuente ubicación'] || '').trim(),
+            ubicacion: String(row['Ubicación'] || row['Ubicacion'] || '').trim(),
             palletName: String(row['Nombre de palet'] || '').trim(),
             productCode,
             transactionType: txType,
@@ -189,10 +219,10 @@ export async function resolveOneDriveFolderContext(
             sapRef,
             orderNumber: normalizeOrderNumber(sapRef),
             origin: String(row['Origen'] || '').trim(),
-            lotNumber: String(row['Lote #'] || '').trim(),
-            serialNumber: String(row['# Serie'] || '').trim(),
-            initialQty: parseFloat(String(row['Cantidad inicial'] || '0').replace(',', '.')) || 0,
-            finalQty: parseFloat(String(row['Cant. Final'] || '0').replace(',', '.')) || 0,
+            lotNumber: String(row['Lote #'] || row['No. de lote'] || '').trim(),
+            serialNumber: String(row['# Serie'] || row['Numero de serie'] || '').trim(),
+            initialQty: parseFloat(String(row['Cantidad inicial'] || row['Cant. inicial'] || '0').replace(',', '.')) || 0,
+            finalQty: parseFloat(String(row['Cant. Final'] || row['Cant. final'] || '0').replace(',', '.')) || 0,
             cantDelta,
             uom: String(row['UOM'] || 'UND').trim(),
           });
@@ -203,19 +233,25 @@ export async function resolveOneDriveFolderContext(
     }
   }
 
-  // 6. Download and parse Productividad
+  // 6. Download and parse Productividad (current day live transactions)
+  // Field equivalences from Comparativo.csv:
+  // _tr:            Bodega; Ubicación Origen; Ubicación; Nombre de palet; Código de Producto; Tipo de transacción; Fecha / Hora; Nombre del empleado; Referencia LISA; Referencia SAP; Origen; Lote #; # Serie; Cantidad inicial; Cant. Final; Cant. Delta; UOM
+  // Productividad:  Bodega; Fuente ubicación; Ubicación; Nombre de palet; Producto #;          Tipo de transacción; Fecha / Hora; Nombre del empleado; Referencia LISA; Referencia SAP; Origen; No. de lote; Numero de serie; Cant. inicial; Cant. final; Cant. delta; UOM
   if (prodFile) {
     try {
       const buffer = await downloadFile(prodFile.ServerRelativeUrl);
       const wb = XLSX.read(buffer, { type: 'buffer' });
       const sheetName = wb.SheetNames[0];
       const sheet = wb.Sheets[sheetName];
+      fixSheetRef(sheet);
       const jsonRows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
 
       jsonRows.forEach((row, idx) => {
         const sapRef = String(row['Referencia SAP'] || row['Ref SAP'] || '').trim();
-        const productCode = normalizeProductCode(row['Producto #'] || row['Producto'] || '');
-        const rawDelta = row['Cant. delta'] || row['Delta'] || '0';
+        const productCode = normalizeProductCode(
+          row['Producto #'] || row['Código de Producto'] || row['Codigo de Producto'] || row['Producto'] || ''
+        );
+        const rawDelta = row['Cant. delta'] || row['Cant. Delta'] || row['Delta'] || '0';
         const cantDelta = parseFloat(String(rawDelta).replace(',', '.')) || 0;
         const txType = String(row['Tipo de transacción'] || row['Tipo de transaccion'] || '').trim().toUpperCase();
 
@@ -224,21 +260,21 @@ export async function resolveOneDriveFolderContext(
             id: `prod_${Date.now()}_${idx}`,
             source: 'productividad',
             bodega: String(row['Bodega'] || '600').trim(),
-            origenUbicacion: String(row['Fuente ubicación'] || row['Fuente ubicacion'] || '').trim(),
-            ubicacion: String(row['Ubicación'] || '').trim(),
+            origenUbicacion: String(row['Fuente ubicación'] || row['Fuente ubicacion'] || row['Ubicación Origen'] || '').trim(),
+            ubicacion: String(row['Ubicación'] || row['Ubicacion'] || '').trim(),
             palletName: String(row['Nombre de palet'] || '').trim(),
             productCode,
             transactionType: txType,
             dateTime: String(row['Fecha / Hora'] || '').trim(),
             employeeName: String(row['Nombre del empleado'] || 'Operador').trim(),
-            lisaRef: String(row['Referencia LISA'] || '').trim(),
+            lisaRef: String(row['Referencia LISA'] || row['Ref LISA'] || '').trim(),
             sapRef,
             orderNumber: normalizeOrderNumber(sapRef),
             origin: String(row['Origen'] || '').trim(),
-            lotNumber: String(row['No. de lote'] || '').trim(),
-            serialNumber: String(row['Numero de serie'] || '').trim(),
-            initialQty: parseFloat(String(row['Cant. inicial'] || '0').replace(',', '.')) || 0,
-            finalQty: parseFloat(String(row['Cant. final'] || '0').replace(',', '.')) || 0,
+            lotNumber: String(row['No. de lote'] || row['Lote #'] || '').trim(),
+            serialNumber: String(row['Numero de serie'] || row['# Serie'] || '').trim(),
+            initialQty: parseFloat(String(row['Cant. inicial'] || row['Cantidad inicial'] || '0').replace(',', '.')) || 0,
+            finalQty: parseFloat(String(row['Cant. final'] || row['Cant. Final'] || '0').replace(',', '.')) || 0,
             cantDelta,
             uom: String(row['UOM'] || 'UND').trim(),
           });
@@ -249,15 +285,26 @@ export async function resolveOneDriveFolderContext(
     }
   }
 
+  // Deduplicate transactions if any record appears in both _tr and Productividad
+  const seenTx = new Set<string>();
+  const deduplicatedTx: TransactionRecord[] = [];
+  for (const tx of transactions) {
+    const key = `${tx.sapRef}|${tx.lisaRef}|${tx.productCode}|${tx.transactionType}|${tx.cantDelta}|${tx.ubicacion}|${tx.dateTime}`;
+    if (!seenTx.has(key)) {
+      seenTx.add(key);
+      deduplicatedTx.push(tx);
+    }
+  }
+
   return {
     success: true,
     message: `Sincronización completa con OneDrive exitosa. Encontrados ${filesFound.length} archivos en la carpeta.`,
     filesFound,
     liCount: liRecords.length,
-    trCount: transactions.filter(t => t.source === '_tr').length,
-    prodCount: transactions.filter(t => t.source === 'productividad').length,
+    trCount: deduplicatedTx.filter(t => t.source === '_tr').length,
+    prodCount: deduplicatedTx.filter(t => t.source === 'productividad').length,
     liRecords,
-    transactions,
+    transactions: deduplicatedTx,
     timestamp: new Date().toISOString(),
   };
 }

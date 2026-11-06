@@ -9,6 +9,7 @@ import {
   saveLiOrders,
   saveTransactions,
   syncCardsWithTransactions,
+  pullBoardStateFromServer,
 } from '../services/dataStorage';
 import { Card } from '../types';
 import {
@@ -293,17 +294,51 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   };
 
   // Run full sync calculation
-  const handleRunFullSync = () => {
+  const handleRunFullSync = async () => {
     setIsProcessing(true);
-    setTimeout(() => {
+    try {
+      // 1. Fetch latest transactions from server for all active cards
+      const activeCards = getCards();
+      const orderNumbers = Array.from(new Set(activeCards.map((c: Card) => c.orderNumber)));
+      if (orderNumbers.length > 0) {
+        try {
+          const batchRes = await fetch('/api/onedrive/batch-transactions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ orderNumbers }),
+          });
+          const batchData = await batchRes.json();
+          if (batchData.success && batchData.transactions?.length > 0) {
+            const existingTxs = getTransactions();
+            const mergedTxs = [
+              ...batchData.transactions,
+              ...existingTxs.filter((e: any) => !batchData.transactions.some((t: any) => t.id === e.id)),
+            ];
+            saveTransactions(mergedTxs);
+          }
+        } catch (e) {
+          console.warn('Could not batch-sync transactions:', e);
+        }
+      }
+
+      // 2. Also pull latest board state from server
+      await pullBoardStateFromServer();
+
+      // 3. Reconcile cards
       const result = syncCardsWithTransactions();
       setFeedback({
         type: 'success',
-        message: `Sincronización completa: ${result.updatedCount} tarjetas actualizadas, ${result.movedToDespachoCount} copiadas a Despacho, ${result.completedCount} finalizadas y eliminadas del tablero.`,
+        message: `Sincronización completa: ${result.updatedCount} tarjetas actualizadas, ${result.movedToDespachoCount} enviadas a Despacho, ${result.completedCount} finalizadas y archivadas.`,
       });
-      setIsProcessing(false);
       onDataRefreshed();
-    }, 300);
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: `Error al procesar: ${err.message}`,
+      });
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // Reset to sample initial state

@@ -58,7 +58,7 @@ export const CardView: React.FC<CardViewProps> = ({
   // Filter items to show ONLY pending products (exclude finished ones from card preview)
   const pendingItems = card.items.filter(item => {
     if (isDespachoCard) {
-      return (item.dispatchedQty || 0) < item.requestedQty;
+      return (item.pickedQty || 0) > (item.dispatchedQty || 0);
     }
     return (item.pickedQty || 0) < item.requestedQty;
   });
@@ -137,19 +137,51 @@ export const CardView: React.FC<CardViewProps> = ({
           {pendingItems.length === 0 ? (
             <div className="bg-emerald-50 border border-emerald-200/70 rounded-lg p-2.5 text-center text-[11px] text-emerald-800 font-semibold flex items-center justify-center gap-1.5 my-1">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{isDespachoCard ? '¡Orden lista para despacho!' : '¡Todos los productos pickeados!'}</span>
+              <span>{isDespachoCard ? '¡Todo lo pickeado fue despachado!' : '¡Todos los productos pickeados!'}</span>
             </div>
           ) : (
             <div className="space-y-1.5 mb-2.5 bg-slate-50 rounded-lg p-2 border border-slate-100 text-xs">
               <div className="flex items-center justify-between text-[10px] font-bold text-amber-800 bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200/60 mb-1">
                 <div className="flex items-center gap-1">
                   <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
-                  <span>Pendiente de pickear ({pendingItems.length} código{pendingItems.length > 1 ? 's' : ''}):</span>
+                  <span>
+                    {isDespachoCard
+                      ? `Listo para despachar (${pendingItems.length} código${pendingItems.length > 1 ? 's' : ''}):`
+                      : `Pendiente de pickear (${pendingItems.length} código${pendingItems.length > 1 ? 's' : ''}):`}
+                  </span>
                 </div>
               </div>
 
               {previewPendingItems.map(item => {
-                const currentQty = isDespachoCard ? item.dispatchedQty : item.pickedQty;
+                if (isDespachoCard) {
+                  const readyQty = Math.max(0, (item.pickedQty || 0) - (item.dispatchedQty || 0));
+                  const pct = Math.min(100, Math.round(((item.dispatchedQty || 0) / (item.pickedQty || 1)) * 100));
+
+                  return (
+                    <div key={item.id} className="border-b border-slate-200/60 last:border-b-0 pb-1 last:pb-0">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-mono font-bold text-slate-800 truncate max-w-[150px]" title={item.description}>
+                          {item.productCode}
+                        </span>
+                        <span className="font-mono text-[10.5px] tabular-nums font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200/80 shrink-0 ml-1">
+                          Por despachar: {readyQty} u. ({item.dispatchedQty || 0}/{item.pickedQty || 0})
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-500 truncate" title={item.description}>
+                        {item.description}
+                      </div>
+                      {/* Progress bar */}
+                      <div className="w-full bg-slate-200 h-1 rounded-full mt-1 overflow-hidden">
+                        <div
+                          className="h-full rounded-full transition-all duration-300 bg-amber-500"
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  );
+                }
+
+                const currentQty = item.pickedQty || 0;
                 const remainingQty = Math.max(0, item.requestedQty - currentQty);
                 const pct = Math.min(100, Math.round((currentQty / (item.requestedQty || 1)) * 100));
 

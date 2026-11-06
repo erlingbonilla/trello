@@ -80,14 +80,17 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
 
   // Perform live lookup on 9-digit order number
   useEffect(() => {
+    // Immediately clear previous order lookup state so stale data is never retained
+    setCurrentOrderLookup(null);
+    setClientFound(null);
+    setStProducts([]);
+    setHasOtherBodegas(false);
+    setOtherBodegasSummary([]);
+    setFeedback(null);
+
     const clean = orderNumber.replace(/\D/g, '').slice(0, 9);
     if (clean.length < 9) {
-      setCurrentOrderLookup(null);
-      setClientFound(null);
-      setStProducts([]);
-      setHasOtherBodegas(false);
-      setOtherBodegasSummary([]);
-      setFeedback(null);
+      setIsSearchingServer(false);
       return;
     }
 
@@ -130,11 +133,11 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
         setStProducts(stItems);
         setFeedback(null);
       } else if (items.length > 0) {
-        // Order only has items in non-ST bodegas (e.g. 200408091 in FB)
+        // Order only has items in non-ST bodegas
         setStProducts([]);
         setFeedback({
           type: 'error',
-          message: `🚫 La Orden #${clean} existe en OneDrive, pero NO contiene productos para la ubicación ST (Bodega Estándar/Stock). Solo contiene productos en bodega(s) ${Array.from(new Set(nonStBodegas)).join(', ')}. No se puede crear tarjeta de picking.`,
+          message: `🚫 La Orden #${clean} existe en OneDrive, pero NO contiene productos para la ubicación ST (Bodega Estándar/Stock). Solo contiene productos en bodega(s) ${Array.from(new Set(nonStBodegas)).join(', ')}. No se puede crear tarjeta de picking en este tablero.`,
         });
       } else {
         setStProducts([]);
@@ -145,23 +148,54 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
       }
     };
 
-    // Query server OneDrive cache directly first (handles 37k+ rows instantly)
+    // Fast indexed server search
     let active = true;
     setIsSearchingServer(true);
 
-    fetch(`/api/onedrive/order/${clean}`)
-      .then(res => res.json())
-      .then(data => {
-        if (!active) return;
-        if (data.success && data.items && data.items.length > 0) {
-          setCurrentOrderLookup({
-            client: data.client,
-            items: data.items,
-            transactions: data.transactions || [],
-          });
-          applyOrderItems(data.client, data.items);
-        } else {
-          // Local fallback check
+    const searchTimer = setTimeout(() => {
+      fetch(`/api/onedrive/order/${clean}`)
+        .then(res => res.json())
+        .then(data => {
+          if (!active) return;
+          if (data.success && data.items && data.items.length > 0) {
+            setCurrentOrderLookup({
+              client: data.client,
+              items: data.items,
+              transactions: data.transactions || [],
+            });
+            applyOrderItems(data.client, data.items);
+          } else {
+            // Local fallback check
+            const liRecords = getLiOrders();
+            const matches = liRecords.filter(r => normalizeOrderNumber(r.orderNumber) === clean);
+            if (matches.length > 0) {
+              setCurrentOrderLookup({
+                client: matches[0].client,
+                items: matches,
+                transactions: [],
+              });
+              applyOrderItems(matches[0].client, matches);
+            } else {
+              setCurrentOrderLookup(null);
+              setClientFound(null);
+              setStProducts([]);
+              setHasOtherBodegas(false);
+              if (cardType === 'OV') {
+                setFeedback({
+                  type: 'error',
+                  message: `El número de Orden #${clean} no existe en el archivo _li de OneDrive.`,
+                });
+              } else {
+                setFeedback({
+                  type: 'info',
+                  message: `Orden #${clean} no está en _li; se creará con referencia desde transacciones SAP.`,
+                });
+              }
+            }
+          }
+        })
+        .catch(() => {
+          if (!active) return;
           const liRecords = getLiOrders();
           const matches = liRecords.filter(r => normalizeOrderNumber(r.orderNumber) === clean);
           if (matches.length > 0) {
@@ -181,45 +215,17 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
                 type: 'error',
                 message: `El número de Orden #${clean} no existe en el archivo _li de OneDrive.`,
               });
-            } else {
-              setFeedback({
-                type: 'info',
-                message: `Orden #${clean} no está en _li; se creará con referencia desde transacciones SAP.`,
-              });
             }
           }
-        }
-      })
-      .catch(() => {
-        if (!active) return;
-        const liRecords = getLiOrders();
-        const matches = liRecords.filter(r => normalizeOrderNumber(r.orderNumber) === clean);
-        if (matches.length > 0) {
-          setCurrentOrderLookup({
-            client: matches[0].client,
-            items: matches,
-            transactions: [],
-          });
-          applyOrderItems(matches[0].client, matches);
-        } else {
-          setCurrentOrderLookup(null);
-          setClientFound(null);
-          setStProducts([]);
-          setHasOtherBodegas(false);
-          if (cardType === 'OV') {
-            setFeedback({
-              type: 'error',
-              message: `El número de Orden #${clean} no existe en el archivo _li de OneDrive.`,
-            });
-          }
-        }
-      })
-      .finally(() => {
-        if (active) setIsSearchingServer(false);
-      });
+        })
+        .finally(() => {
+          if (active) setIsSearchingServer(false);
+        });
+    }, 150);
 
     return () => {
       active = false;
+      clearTimeout(searchTimer);
     };
   }, [orderNumber, cardType]);
 
@@ -639,10 +645,16 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
           <button
             type="button"
             onClick={handleSubmit}
-            className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+            disabled={
+              isSearchingServer ||
+              orderNumber.replace(/\D/g, '').length !== 9 ||
+              selectedPickers.length === 0 ||
+              (cardType === 'OV' && (!clientFound || stProducts.length === 0))
+            }
+            className="px-5 py-2 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
           >
             <Check className="w-4 h-4" />
-            <span>Crear y Asignar Tarjeta</span>
+            <span>{isSearchingServer ? 'Buscando Orden...' : 'Crear y Asignar Tarjeta'}</span>
           </button>
         </div>
       </div>

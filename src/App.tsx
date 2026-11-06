@@ -79,28 +79,35 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Schedule-aware background auto-sync poll (every 2 minutes)
+  // Schedule-aware background auto-sync poll (every 15s) and on startup
   useEffect(() => {
+    const fetchBatchTxs = () => {
+      const orderNums = getCards().map(c => c.orderNumber);
+      if (orderNums.length > 0) {
+        fetch('/api/onedrive/batch-transactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderNumbers: orderNums }),
+        })
+          .then(res => res.json())
+          .then(data => {
+            if (data && data.transactions && data.transactions.length > 0) {
+              syncCardsWithTransactions(data.transactions);
+              setCards(getCards());
+            }
+          })
+          .catch(() => {});
+      }
+    };
+
+    // Run immediately on mount
+    fetchBatchTxs();
+
     const syncInterval = setInterval(() => {
       if (isWithinSyncSchedule()) {
-        const orderNums = getCards().map(c => c.orderNumber);
-        if (orderNums.length > 0) {
-          fetch('/api/onedrive/batch-transactions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ orderNumbers: orderNums }),
-          })
-            .then(res => res.json())
-            .then(data => {
-              if (data && data.transactions && data.transactions.length > 0) {
-                syncCardsWithTransactions();
-                setCards(getCards());
-              }
-            })
-            .catch(() => {});
-        }
+        fetchBatchTxs();
       }
-    }, 120000); // 2 minutes
+    }, 15000); // 15 seconds
 
     return () => clearInterval(syncInterval);
   }, []);
@@ -389,8 +396,8 @@ export default function App() {
                   user={despachoUser}
                   cards={filteredCards.filter(
                     c =>
-                      c.status === 'despacho' &&
-                      !(c.items.length > 0 && c.items.every(i => i.isDispatched || (i.dispatchedQty || 0) >= i.requestedQty))
+                      (c.status === 'despacho' || c.items.some(i => (i.pickedQty || 0) > (i.dispatchedQty || 0))) &&
+                      c.items.some(i => (i.pickedQty || 0) > (i.dispatchedQty || 0))
                   )}
                   currentUser={currentUser}
                   allUsers={users}

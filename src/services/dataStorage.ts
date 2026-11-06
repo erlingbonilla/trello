@@ -363,7 +363,14 @@ export function saveCards(cards: Card[]) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ cards, audits: getCompletedAudits() }),
-    }).catch(() => {});
+    })
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.success && Array.isArray(data.cards)) {
+          safeSetStorage(STORAGE_KEYS.CARDS, JSON.stringify(data.cards));
+        }
+      })
+      .catch(() => {});
   } catch {
     //
   }
@@ -435,6 +442,18 @@ export interface CreateCardResult {
   success: boolean;
   message: string;
   card?: Card;
+}
+
+// Helper to resolve product description from _li orders cache
+export function getProductDescriptionFromLi(productCode: string, fallback?: string): string {
+  const clean = String(productCode || '').replace(/^0+/, '').toUpperCase();
+  if (!clean) return fallback || productCode;
+  const li = getLiOrders();
+  const found = li.find(r => {
+    const rClean = String(r.productCode || '').replace(/^0+/, '').toUpperCase();
+    return rClean === clean && r.description && r.description.trim().length > 0;
+  });
+  return found?.description ? String(found.description).trim() : (fallback || `PRODUCTO ${productCode}`);
 }
 
 export function validateAndCreateCard(input: CreateCardInput): CreateCardResult {
@@ -522,7 +541,7 @@ export function validateAndCreateCard(input: CreateCardInput): CreateCardResult 
       : liOrders.filter(row => row.orderNumber === cleanOrderNum);
 
     if (sourceRows.length > 0) {
-      clientName = clientName || sourceRows[0].client;
+      clientName = input.customClient || clientName || sourceRows[0].client;
       sourceRows.forEach((row: any, idx: number) => {
         items.push({
           id: `item_${cleanOrderNum}_${idx}`,
@@ -539,25 +558,36 @@ export function validateAndCreateCard(input: CreateCardInput): CreateCardResult 
       });
     } else {
       // Find from transactions
-      const txs = getTransactions().filter(t => t.orderNumber === cleanOrderNum);
-      clientName = input.type === 'TR' ? 'TRASLADO INTERNO ENTRE BODEGAS' : 'ORDEN DE FABRICACION PLANTA';
+      const txs = getTransactions().filter(
+        t => t.orderNumber === cleanOrderNum || (t.sapRef && t.sapRef.includes(cleanOrderNum))
+      );
+      clientName = input.customClient || (input.type === 'TR' ? 'TRASLADO INTERNO ENTRE BODEGAS' : 'ORDEN DE FABRICACION PLANTA');
       if (txs.length > 0) {
         // Group by product
-        const prodMap = new Map<string, number>();
+        const prodMap = new Map<string, { qty: number; uom: string; bodega: string }>();
         txs.forEach(t => {
+          const rawCode = String(t.productCode || '').trim();
+          const code = /^\d+$/.test(rawCode) && rawCode.length < 10 ? rawCode.padStart(10, '0') : rawCode;
+          if (!code) return;
           const qty = Math.abs(t.cantDelta) || t.finalQty || 10;
-          prodMap.set(t.productCode, (prodMap.get(t.productCode) || 0) + qty);
+          const existing = prodMap.get(code);
+          if (existing) {
+            existing.qty = Math.max(existing.qty, qty);
+          } else {
+            prodMap.set(code, { qty, uom: t.uom || 'UND', bodega: t.bodega || '600' });
+          }
         });
         let idx = 0;
-        prodMap.forEach((qty, code) => {
+        prodMap.forEach((info, code) => {
+          const desc = getProductDescriptionFromLi(code, `PRODUCTO ${code} (${info.uom}) - ${info.bodega}`);
           items.push({
             id: `item_${cleanOrderNum}_${idx++}`,
             productCode: code,
-            description: `PRODUCTO ${code}`,
-            requestedQty: qty,
+            description: desc,
+            requestedQty: info.qty,
             pickedQty: 0,
             dispatchedQty: 0,
-            bodegaCode: '600',
+            bodegaCode: info.bodega,
             location: 'ST',
             isFinished: false,
             isDispatched: false,
@@ -630,11 +660,20 @@ export function validateAndCreateCard(input: CreateCardInput): CreateCardResult 
 }
 
 // Processing transactions against cards and triggering automated moves/closures
-export function syncCardsWithTransactions(): {
+export function syncCardsWithTransactions(incomingTxs?: TransactionRecord[]): {
   updatedCount: number;
   movedToDespachoCount: number;
   completedCount: number;
 } {
+  if (incomingTxs && incomingTxs.length > 0) {
+    const existing = getTransactions();
+    const existingIds = new Set(existing.map(e => e.id));
+    const toAdd = incomingTxs.filter(t => !existingIds.has(t.id));
+    if (toAdd.length > 0) {
+      saveTransactions([...toAdd, ...existing].slice(0, 500));
+    }
+  }
+
   const cards = getCards();
   const transactions = getTransactions();
   const audits = getCompletedAudits();
@@ -650,22 +689,110 @@ export function syncCardsWithTransactions(): {
 
   cards.forEach(card => {
     // Relevant transactions for this order
-    const orderTxs = transactions.filter(t => t.orderNumber === card.orderNumber);
+    const cleanCardOrder = card.orderNumber.replace(/\D/g, '').slice(-9).padStart(9, '0');
+    const orderTxs = transactions.filter(t => {
+      // 1. Must be in location ST
+      if (!isSTLocation(t.bodega)) return false;
+
+      // 2. Order number match
+      const cleanT = String(t.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      const cleanSap = String(t.sapRef || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      const matchesOrder = cleanT === cleanCardOrder || cleanSap === cleanCardOrder || t.orderNumber === card.orderNumber || (t.sapRef && t.sapRef.includes(cleanCardOrder));
+      if (!matchesOrder) return false;
+
+      // 3. SAP prefix match: OV -> SO, TR -> ITR, OF -> WO
+      const sap = String(t.sapRef || '').trim().toUpperCase();
+      const txType = String(t.transactionType || '').trim().toUpperCase();
+
+      if (card.type === 'OV') {
+        if (!sap.includes('SO')) return false;
+        return txType === 'PI' || txType === 'DL';
+      } else if (card.type === 'TR') {
+        if (!sap.includes('ITR')) return false;
+        return txType === 'PIREQ' || txType === 'REQDEL';
+      } else if (card.type === 'OF') {
+        if (!sap.includes('WO')) return false;
+        return txType === 'PIPROD' || txType === 'TRPROD';
+      }
+      return false;
+    });
 
     // Track if any changes happened
     let cardModified = false;
 
+    // Synchronize items with real WMS transactions:
+    // If card has placeholder item or items that don't match orderTxs, replace/augment with the real WMS products!
+    if (orderTxs.length > 0) {
+      const isPlaceholder = card.items.length === 1 && (
+        card.items[0].productCode.includes('ITEM') ||
+        !orderTxs.some(t => {
+          const c1 = String(t.productCode || '').replace(/^0+/, '').toUpperCase();
+          const c2 = String(card.items[0].productCode || '').replace(/^0+/, '').toUpperCase();
+          return c1 === c2;
+        })
+      );
+
+      if (isPlaceholder) {
+        const prodMap = new Map<string, any>();
+        orderTxs.forEach(t => {
+          const rawCode = String(t.productCode || '').trim();
+          const code = /^\d+$/.test(rawCode) && rawCode.length < 10 ? rawCode.padStart(10, '0') : rawCode;
+          if (!code) return;
+          const delta = typeof t.cantDelta === 'number' ? t.cantDelta : parseFloat(String(t.cantDelta).replace(',', '.')) || 0;
+          if (delta < 0) {
+            const qty = Math.abs(delta);
+            const existing = prodMap.get(code);
+            if (existing) {
+              existing.requestedQty += qty;
+            } else {
+              const desc = getProductDescriptionFromLi(code, `PRODUCTO ${code} (${t.uom || 'UND'}) - ${t.bodega || 'ST'}`);
+              prodMap.set(code, {
+                id: `item_${cleanCardOrder}_${code}`,
+                productCode: code,
+                description: desc,
+                requestedQty: qty,
+                pickedQty: 0,
+                dispatchedQty: 0,
+                bodegaCode: t.bodega || '600',
+                location: 'ST',
+                isFinished: false,
+                isDispatched: false,
+              });
+            }
+          }
+        });
+
+        if (prodMap.size > 0) {
+          card.items = Array.from(prodMap.values());
+          cardModified = true;
+        }
+      }
+    }
+
+    // Also enrich any existing card items that have placeholder descriptions with real names from _li
+    card.items.forEach(it => {
+      if (!it.description || it.description.startsWith('PRODUCTO ') || it.description.includes('ITEM')) {
+        const enriched = getProductDescriptionFromLi(it.productCode, it.description);
+        if (enriched && enriched !== it.description) {
+          it.description = enriched;
+          cardModified = true;
+        }
+      }
+    });
+
     // Recalculate picked and dispatched quantities for each product item
     card.items.forEach(item => {
-      const prodTxs = orderTxs.filter(
-        t => normalizeProductCode(t.productCode).toUpperCase() === normalizeProductCode(item.productCode).toUpperCase()
-      );
+      const itemCodeClean = String(item.productCode || '').replace(/^0+/, '').toUpperCase();
+      const prodTxs = orderTxs.filter(t => {
+        const tCodeClean = String(t.productCode || '').replace(/^0+/, '').toUpperCase();
+        return tCodeClean === itemCodeClean || normalizeProductCode(t.productCode).toUpperCase() === normalizeProductCode(item.productCode).toUpperCase();
+      });
 
       let pickedTotal = 0;
       let dispatchedTotal = 0;
 
       if (card.type === 'OV') {
-        // Step 2: For OV, look for "PI" transactions and sum only negative values of Cant. Delta
+        // Step 2: For OV, look ONLY for "PI" transactions and sum only negative values of Cant. Delta
         const piTxs = prodTxs.filter(t => t.transactionType === 'PI');
         piTxs.forEach(t => {
           if (t.cantDelta < 0) {
@@ -673,7 +800,7 @@ export function syncCardsWithTransactions(): {
           }
         });
 
-        // Step 4: For Despacho, look for "DL" transactions and sum negative values of Cant. Delta
+        // Step 4: For Despacho, look ONLY for "DL" transactions and sum negative values of Cant. Delta
         const dlTxs = prodTxs.filter(t => t.transactionType === 'DL');
         dlTxs.forEach(t => {
           if (t.cantDelta < 0) {
@@ -681,103 +808,77 @@ export function syncCardsWithTransactions(): {
           }
         });
       } else if (card.type === 'TR') {
-        // TR: PIREQ (positive) and REQDEL (negative)
+        // TR: ONLY PIREQ for picking, ONLY REQDEL for dispatch (summing negative values of Cant. Delta from bin)
         const piReqTxs = prodTxs.filter(t => t.transactionType === 'PIREQ');
         piReqTxs.forEach(t => {
-          if (t.cantDelta > 0) pickedTotal += t.cantDelta;
+          if (t.cantDelta < 0) {
+            pickedTotal += Math.abs(t.cantDelta);
+          }
         });
 
         const reqDelTxs = prodTxs.filter(t => t.transactionType === 'REQDEL');
         reqDelTxs.forEach(t => {
-          if (t.cantDelta < 0) dispatchedTotal += Math.abs(t.cantDelta);
+          if (t.cantDelta < 0) {
+            dispatchedTotal += Math.abs(t.cantDelta);
+          }
         });
       } else if (card.type === 'OF') {
-        // OF: PIPROD (positive) and TRPROD (negative)
+        // OF: ONLY PIPROD for picking, ONLY TRPROD for dispatch (summing negative values of Cant. Delta)
         const piProdTxs = prodTxs.filter(t => t.transactionType === 'PIPROD');
         piProdTxs.forEach(t => {
-          if (t.cantDelta > 0) pickedTotal += t.cantDelta;
+          if (t.cantDelta < 0) {
+            pickedTotal += Math.abs(t.cantDelta);
+          }
         });
 
         const trProdTxs = prodTxs.filter(t => t.transactionType === 'TRPROD');
         trProdTxs.forEach(t => {
-          if (t.cantDelta < 0) dispatchedTotal += Math.abs(t.cantDelta);
+          if (t.cantDelta < 0) {
+            dispatchedTotal += Math.abs(t.cantDelta);
+          }
         });
       }
 
       if (item.pickedQty !== pickedTotal || item.dispatchedQty !== dispatchedTotal) {
         item.pickedQty = pickedTotal;
         item.dispatchedQty = dispatchedTotal;
-        item.isFinished = pickedTotal >= item.requestedQty;
-        item.isDispatched = dispatchedTotal >= item.requestedQty;
+        item.isFinished = item.requestedQty > 0 && pickedTotal >= item.requestedQty;
+        item.isDispatched = item.requestedQty > 0 && dispatchedTotal >= item.requestedQty;
         cardModified = true;
       }
     });
 
-    if (cardModified) updatedCount++;
-
-    // Check picking card logic vs Despacho card logic
     if (card.status === 'picking') {
       const allItemsFinished = card.items.length > 0 && card.items.every(i => i.isFinished || (i.pickedQty || 0) >= i.requestedQty);
-      const anyItemFinished = card.items.some(i => i.isFinished || (i.pickedQty || 0) > 0);
       const allItemsDispatched = card.items.length > 0 && card.items.every(i => i.isDispatched || (i.dispatchedQty || 0) >= i.requestedQty);
 
-      // Check if Despacho card needs to be spawned
-      if (anyItemFinished && !allItemsDispatched) {
-        // Check if despacho card already exists for this order
-        const existingDespacho = cards.find(
-          c => c.orderNumber === card.orderNumber && c.status === 'despacho'
-        ) || newDespachoCards.find(c => c.orderNumber === card.orderNumber && c.status === 'despacho');
-
-        if (!existingDespacho) {
-          const newDspCard: Card = {
-            id: `despacho_${card.orderNumber}_${Date.now()}`,
-            type: card.type,
-            orderNumber: card.orderNumber,
-            client: card.client,
-            assignedPickerIds: [despachoUser.id],
-            labels: [...card.labels],
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            isMulti: card.isMulti,
-            status: 'despacho',
-            items: card.items.map(item => ({
-              ...item,
-              id: `dsp_${item.id}`,
-            })),
-          };
-          newDespachoCards.push(newDspCard);
-          card.despachoCardId = newDspCard.id;
-          movedToDespachoCount++;
-        }
-      }
-
-      // CRITICAL RULE: When ALL codes have been picked (100%), the card is AUTOMATICALLY ELIMINATED from pickers' lists!
-      if (allItemsFinished) {
-        // Eliminated from pickers' column - do not add to cardsToKeep!
-        if (allItemsDispatched) {
-          // If already has DL on all products, record completed audit immediately
-          completedCount++;
-          const pickerNames = Array.from(
-            new Set(orderTxs.map(t => t.employeeName).filter(Boolean))
-          );
-          audits.unshift({
-            orderNumber: card.orderNumber,
-            type: card.type,
-            client: card.client,
-            completedAt: new Date().toISOString(),
-            pickerNames: pickerNames.length > 0 ? pickerNames : ['Miguel', 'Equipo Despacho'],
-            totalItems: card.items.length,
-            transactions: orderTxs,
-          });
-        }
+      if (allItemsDispatched) {
+        // Fully complete with DL! Remove from active board and record audit
+        completedCount++;
+        const pickerNames = Array.from(
+          new Set(orderTxs.map(t => t.employeeName).filter(Boolean))
+        );
+        audits.unshift({
+          orderNumber: card.orderNumber,
+          type: card.type,
+          client: card.client,
+          completedAt: new Date().toISOString(),
+          pickerNames: pickerNames.length > 0 ? pickerNames : ['Miguel', 'Equipo Despacho'],
+          totalItems: card.items.length,
+          transactions: orderTxs,
+        });
       } else {
+        if (allItemsFinished) {
+          card.status = 'despacho';
+          movedToDespachoCount++;
+        } else {
+          card.status = 'picking';
+        }
         cardsToKeep.push(card);
       }
     } else if (card.status === 'despacho') {
-      // CRITICAL RULE: In Despacho, when ALL codes have DL (Delivery/Despachado), the card is AUTOMATICALLY ELIMINATED from the board!
       const allItemsDispatched = card.items.length > 0 && card.items.every(i => i.isDispatched || (i.dispatchedQty || 0) >= i.requestedQty);
       if (allItemsDispatched) {
-        // Fully complete with DL! Remove from board and record audit
         completedCount++;
         const pickerNames = Array.from(
           new Set(orderTxs.map(t => t.employeeName).filter(Boolean))
@@ -797,7 +898,24 @@ export function syncCardsWithTransactions(): {
     }
   });
 
-  const finalCards = [...cardsToKeep, ...newDespachoCards];
+  // Deduplicate by clean order number + card type
+  const cardMap = new Map<string, Card>();
+  cardsToKeep.forEach(c => {
+    const cleanOrd = String(c.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+    const key = `${c.type}_${cleanOrd}`;
+    const existing = cardMap.get(key);
+    if (!existing) {
+      cardMap.set(key, c);
+    } else {
+      const cTime = new Date(c.updatedAt).getTime();
+      const eTime = new Date(existing.updatedAt).getTime();
+      if (cTime >= eTime) {
+        cardMap.set(key, c);
+      }
+    }
+  });
+
+  const finalCards = Array.from(cardMap.values());
   saveCards(finalCards);
   saveCompletedAudits(audits);
 
