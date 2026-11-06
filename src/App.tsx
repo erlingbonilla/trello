@@ -29,7 +29,8 @@ import { UserManagementModal } from './components/UserManagementModal';
 import { DataSyncModal } from './components/DataSyncModal';
 import { ManageLabelsModal } from './components/ManageLabelsModal';
 import { LoginModal } from './components/LoginModal';
-import { Search, RotateCcw, Layers } from 'lucide-react';
+import { BulkImportModal } from './components/BulkImportModal';
+import { Search, RotateCcw, Layers, Upload } from 'lucide-react';
 
 export default function App() {
   // Initialization
@@ -123,6 +124,7 @@ export default function App() {
   const [dataSyncOpen, setDataSyncOpen] = useState(false);
   const [userMgmtOpen, setUserMgmtOpen] = useState(false);
   const [manageLabelsOpen, setManageLabelsOpen] = useState(false);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
 
   // Filters state
   const [searchFilter, setSearchFilter] = useState('');
@@ -256,13 +258,14 @@ export default function App() {
         onOpenDataSync={() => setDataSyncOpen(true)}
         onOpenUserManagement={() => setUserMgmtOpen(true)}
         onOpenManageLabels={() => setManageLabelsOpen(true)}
+        onOpenBulkImport={() => setBulkImportOpen(true)}
       />
 
       {/* Main Board Subheader: Title, Filters & Stats */}
       <div className="bg-white border-b border-slate-200 px-4 sm:px-6 py-2.5">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3">
           {/* Role Context Notification */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-semibold text-slate-500">Vista activa:</span>
             <span className="text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
               {currentUser.role === 'master' && 'Master (Control Total - Todas las listas)'}
@@ -270,6 +273,16 @@ export default function App() {
               {currentUser.role === 'pickeador' && `Pickeador: ${currentUser.name} (Lista Individual)`}
               {currentUser.role === 'despacho' && 'Despacho (Órdenes en Proceso de Entrega)'}
             </span>
+            {(currentUser.role === 'master' || currentUser.role === 'asignador') && (
+              <button
+                onClick={() => setBulkImportOpen(true)}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 transition-colors shadow-2xs cursor-pointer"
+                title="Subir lote de tarjetas desde archivo CSV o Trello"
+              >
+                <Upload className="w-3 h-3 text-indigo-600" />
+                <span>Subir CSV</span>
+              </button>
+            )}
           </div>
 
           {/* Quick Filters */}
@@ -492,6 +505,13 @@ export default function App() {
         isOpen={manageLabelsOpen}
         onClose={() => setManageLabelsOpen(false)}
         onUpdated={refreshData}
+      />
+
+      <BulkImportModal
+        isOpen={bulkImportOpen}
+        onClose={() => setBulkImportOpen(false)}
+        onSuccess={refreshData}
+        allUsers={users}
       />
     </div>
   );

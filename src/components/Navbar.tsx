@@ -12,6 +12,7 @@ import {
   Tag,
   Clock,
   CheckCircle2,
+  Upload,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -20,6 +21,7 @@ interface NavbarProps {
   onSwitchUser: (user: User) => void;
   onLogout: () => void;
   onOpenCreateCard: () => void;
+  onOpenBulkImport?: () => void;
   onOpenSummary: () => void;
   onOpenSearch: () => void;
   onOpenDataSync: () => void;
@@ -33,6 +35,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSwitchUser,
   onLogout,
   onOpenCreateCard,
+  onOpenBulkImport,
   onOpenSummary,
   onOpenSearch,
   onOpenDataSync,
@@ -173,6 +176,18 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <Tag className="w-3.5 h-3.5 text-indigo-600" />
               <span className="hidden lg:inline">Etiquetas</span>
+            </button>
+          )}
+
+          {/* Bulk Import CSV Button */}
+          {canCreate && onOpenBulkImport && (
+            <button
+              onClick={onOpenBulkImport}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors whitespace-nowrap shadow-2xs"
+              title="Subir Tarjetas Masivas en CSV (Trello)"
+            >
+              <Upload className="w-3.5 h-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Subir CSV</span>
             </button>
           )}
 

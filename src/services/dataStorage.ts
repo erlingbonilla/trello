@@ -12,6 +12,7 @@ import {
 import { INITIAL_BODEGAS, isSTLocation, getBodegaLocation } from '../data/bodegasCatalog';
 import { INITIAL_CARDS, INITIAL_LI_ORDERS, INITIAL_TRANSACTIONS } from '../data/mockOneDriveData';
 import { INITIAL_USERS } from '../data/initialUsers';
+import { INITIAL_SEEDED_CARDS } from '../data/initialSeededCards';
 import { INITIAL_CARD_LABELS } from '../data/labels';
 import { normalizeProductCode, normalizeOrderNumber } from '../utils/productUtils';
 
@@ -120,9 +121,8 @@ export function initStorage() {
   } catch {
     safeSetStorage(STORAGE_KEYS.CURRENT_USER, JSON.stringify(INITIAL_USERS[0]));
   }
-  if (!localStorage.getItem(STORAGE_KEYS.CARDS) || !localStorage.getItem('app_trello_cleared_initial_v2')) {
+  if (!localStorage.getItem(STORAGE_KEYS.CARDS)) {
     safeSetStorage(STORAGE_KEYS.CARDS, JSON.stringify([]));
-    safeSetStorage('app_trello_cleared_initial_v2', 'true');
   }
   if (!localStorage.getItem(STORAGE_KEYS.LI_ORDERS)) {
     safeSetStorage(STORAGE_KEYS.LI_ORDERS, JSON.stringify(INITIAL_LI_ORDERS));

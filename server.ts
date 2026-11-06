@@ -5,6 +5,7 @@ import { createServer as createViteServer } from 'vite';
 import { resolveOneDriveFolderContext } from './src/services/onedriveFolderSync';
 import { isWithinSyncSchedule, getSyncScheduleInfo } from './src/utils/syncSchedule';
 import { isSTLocation } from './src/data/bodegasCatalog';
+import { INITIAL_SEEDED_CARDS } from './src/data/initialSeededCards';
 
 async function startServer() {
   const app = express();
@@ -228,34 +229,9 @@ async function startServer() {
 
   loadBoardFromDisk();
 
-  // If board is empty on start, seed the 7 TR cards requested by user
-  if (sharedCards.length === 0) {
-    const trOrders = ['200064501', '200064502', '200064503', '200064505', '200064506', '200064507', '200064508'];
-    sharedCards = trOrders.map((ord) => ({
-      id: `card_${Date.now()}_${ord}`,
-      type: 'TR',
-      orderNumber: ord,
-      client: 'TRASLADO INTERNO ENTRE BODEGAS',
-      assignedPickerIds: ['picker_miguel'],
-      labels: ['traslado'],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      isMulti: false,
-      status: 'picking',
-      items: [{
-        id: `item_${ord}_0`,
-        productCode: 'TR-ITEM-01',
-        description: `MATERIAL GENERAL TR #${ord}`,
-        requestedQty: 10,
-        pickedQty: 0,
-        dispatchedQty: 0,
-        bodegaCode: '600',
-        location: 'ST',
-        isFinished: false,
-        isDispatched: false,
-      }],
-    }));
-    saveBoardToDisk();
+  // Dynamic board: starts with loaded cards from disk (or empty board ready for CSV upload / new cards)
+  if (!sharedCards) {
+    sharedCards = [];
   }
 
   const reconcileCardsWithOneDrive = () => {
@@ -456,6 +432,187 @@ async function startServer() {
     reconcileCardsWithOneDrive();
     saveBoardToDisk();
     return res.json({ success: true, cards: sharedCards, audits: sharedAudits });
+  });
+
+  // Bulk Import cards endpoint (from CSV: Numero;Tipo;Usuario)
+  app.post('/api/board/bulk-import', (req, res) => {
+    try {
+      const items: Array<{ orderNumber: string; type: string; username: string }> = req.body?.items || [];
+      if (!Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ success: false, message: 'No se recibieron filas válidas para importar.' });
+      }
+
+      // Group pickers by order number:
+      const orderPickersMap = new Map<string, Set<string>>();
+      const orderTypeMap = new Map<string, string>();
+
+      // User name normalizer
+      const normalizeUser = (name: string): string => {
+        const clean = name.trim().toLowerCase();
+        if (clean.includes('marco')) return 'picker_marco';
+        if (clean.includes('hugo')) return 'picker_hugo';
+        if (clean.includes('gerardo')) return 'picker_gerardo';
+        if (clean.includes('miguel')) return 'picker_miguel';
+        if (clean.includes('jose')) return 'picker_jose';
+        if (clean.includes('ricardo')) return 'picker_ricardo';
+        if (clean.includes('walter')) return 'picker_walter';
+        if (clean.includes('edwin')) return 'picker_edwin';
+        if (clean.includes('despacho')) return 'user_despacho';
+        return 'picker_miguel';
+      };
+
+      items.forEach(row => {
+        const cleanOrd = String(row.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+        if (!cleanOrd || cleanOrd === '000000000') return;
+        const pickerId = normalizeUser(row.username || '');
+        if (!orderPickersMap.has(cleanOrd)) {
+          orderPickersMap.set(cleanOrd, new Set());
+        }
+        orderPickersMap.get(cleanOrd)!.add(pickerId);
+
+        const rawType = String(row.type || 'OV').trim().toUpperCase();
+        const validCardType = rawType === 'TR' ? 'TR' : rawType === 'OF' ? 'OF' : 'OV';
+        orderTypeMap.set(cleanOrd, validCardType);
+      });
+
+      const newCards: any[] = [];
+      const skippedOrders: Array<{ order: string; reason: string }> = [];
+
+      orderPickersMap.forEach((pickerSet, ord) => {
+        const pickers = Array.from(pickerSet);
+        const cardType = orderTypeMap.get(ord) || 'OV';
+        const liRows = cachedLiOrderMap.get(ord) || [];
+
+        let clientName = liRows[0]?.client || '';
+        let cardItems: any[] = [];
+        let hasNonSt = false;
+
+        if (cardType === 'OV') {
+          const stRows = liRows.filter((r: any) => isSTLocation(r.bodegaCode));
+          hasNonSt = liRows.some((r: any) => !isSTLocation(r.bodegaCode));
+
+          if (stRows.length === 0) {
+            skippedOrders.push({
+              order: ord,
+              reason: liRows.length === 0
+                ? 'No existe en el archivo _li de OneDrive'
+                : 'No contiene productos en ubicación ST',
+            });
+            return;
+          }
+
+          clientName = clientName || 'CLIENTE ORDEN ' + ord;
+          cardItems = stRows.map((r: any, idx: number) => ({
+            id: `item_${ord}_${idx}`,
+            productCode: String(r.productCode || '').trim(),
+            description: r.description,
+            requestedQty: r.requestedQty || 1,
+            pickedQty: 0,
+            dispatchedQty: 0,
+            bodegaCode: r.bodegaCode,
+            location: 'ST',
+            isFinished: false,
+            isDispatched: false,
+          }));
+        } else {
+          // For TR or OF
+          clientName = cardType === 'TR' ? 'TRASLADO BODEGA ST' : 'ORDEN DE FABRICACION PLANTA';
+          if (liRows.length > 0) {
+            clientName = liRows[0].client || clientName;
+            cardItems = liRows.filter((r: any) => isSTLocation(r.bodegaCode)).map((r: any, idx: number) => ({
+              id: `item_${ord}_${idx}`,
+              productCode: String(r.productCode || '').trim(),
+              description: r.description,
+              requestedQty: r.requestedQty || 1,
+              pickedQty: 0,
+              dispatchedQty: 0,
+              bodegaCode: r.bodegaCode,
+              location: 'ST',
+              isFinished: false,
+              isDispatched: false,
+            }));
+          } else {
+            // Find in transactions
+            const txs = (cachedTxOrderMap.get(ord) || []).filter((t: any) => isSTLocation(t.bodega));
+            if (txs.length > 0) {
+              const prodMap = new Map<string, any>();
+              txs.forEach((t: any) => {
+                const rawCode = String(t.productCode || '').trim();
+                const code = /^\d+$/.test(rawCode) && rawCode.length < 10 ? rawCode.padStart(10, '0') : rawCode;
+                if (!code) return;
+                const qty = Math.abs(t.cantDelta) || t.finalQty || 1;
+                const desc = getProductDesc(code, `PRODUCTO ${code} (${t.uom || 'UND'}) - ${t.bodega || 'ST'}`);
+                if (!prodMap.has(code)) {
+                  prodMap.set(code, {
+                    id: `item_${ord}_${code}`,
+                    productCode: code,
+                    description: desc,
+                    requestedQty: qty,
+                    pickedQty: 0,
+                    dispatchedQty: 0,
+                    bodegaCode: t.bodega || '600',
+                    location: 'ST',
+                    isFinished: false,
+                    isDispatched: false,
+                  });
+                }
+              });
+              cardItems = Array.from(prodMap.values());
+            } else {
+              cardItems = [{
+                id: `item_${ord}_0`,
+                productCode: `${cardType}-ITEM-01`,
+                description: `MATERIAL GENERAL ${cardType} #${ord}`,
+                requestedQty: 10,
+                pickedQty: 0,
+                dispatchedQty: 0,
+                bodegaCode: '600',
+                location: 'ST',
+                isFinished: false,
+                isDispatched: false,
+              }];
+            }
+          }
+        }
+
+        const labels = [cardType === 'TR' ? 'traslado' : 'ov_tag'];
+        if (hasNonSt) labels.push('multi');
+
+        newCards.push({
+          id: `card_${Date.now()}_${ord}`,
+          type: cardType,
+          orderNumber: ord,
+          client: clientName,
+          assignedPickerIds: pickers,
+          labels,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          isMulti: hasNonSt,
+          status: 'picking',
+          items: cardItems,
+        });
+      });
+
+      // Merge newCards with existing sharedCards (replacing duplicates if already on board)
+      const newOrdersSet = new Set(newCards.map(c => c.orderNumber));
+      const retainedCards = sharedCards.filter(c => !newOrdersSet.has(c.orderNumber));
+      sharedCards = [...retainedCards, ...newCards];
+
+      reconcileCardsWithOneDrive();
+      saveBoardToDisk();
+
+      return res.json({
+        success: true,
+        importedCount: newCards.length,
+        skippedCount: skippedOrders.length,
+        skippedOrders,
+        totalBoardCards: sharedCards.length,
+        cards: sharedCards,
+      });
+    } catch (err: any) {
+      console.error('Error in /api/board/bulk-import:', err);
+      return res.status(500).json({ success: false, message: err.message || 'Error al importar tarjetas.' });
+    }
   });
 
   // Batch transactions endpoint for active cards on the board
