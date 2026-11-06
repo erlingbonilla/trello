@@ -15,6 +15,7 @@ import {
   logoutUser,
   syncCardsWithTransactions,
   pullBoardStateFromServer,
+  clearAllCards,
 } from './services/dataStorage';
 import { isWithinSyncSchedule } from './utils/syncSchedule';
 import { Navbar } from './components/Navbar';
@@ -30,7 +31,7 @@ import { DataSyncModal } from './components/DataSyncModal';
 import { ManageLabelsModal } from './components/ManageLabelsModal';
 import { LoginModal } from './components/LoginModal';
 import { BulkImportModal } from './components/BulkImportModal';
-import { Search, RotateCcw, Layers, Upload } from 'lucide-react';
+import { Search, RotateCcw, Layers, Upload, Trash2 } from 'lucide-react';
 
 export default function App() {
   // Initialization
@@ -173,6 +174,14 @@ export default function App() {
     }
   };
 
+  const handleClearAllCards = () => {
+    if (confirm('¿Está seguro de VACIAR TODO EL TABLERO? Se eliminarán todas las tarjetas activas de prueba.')) {
+      clearAllCards();
+      setCards([]);
+      refreshData();
+    }
+  };
+
   // Filtered cards
   const filteredCards = useMemo(() => {
     return cards.filter(card => {
@@ -281,6 +290,17 @@ export default function App() {
               >
                 <Upload className="w-3 h-3 text-indigo-600" />
                 <span>Subir CSV</span>
+              </button>
+            )}
+
+            {currentUser.role === 'master' && (
+              <button
+                onClick={handleClearAllCards}
+                className="inline-flex items-center gap-1 text-[11px] font-bold text-red-700 hover:text-red-900 bg-red-50 hover:bg-red-100 px-2 py-0.5 rounded border border-red-200 transition-colors shadow-2xs cursor-pointer"
+                title="Eliminar todas las tarjetas de prueba del tablero (Exclusivo Master)"
+              >
+                <Trash2 className="w-3 h-3 text-red-600" />
+                <span>Vaciar Tablero</span>
               </button>
             )}
           </div>

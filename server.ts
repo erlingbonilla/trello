@@ -430,6 +430,13 @@ async function startServer() {
     return res.json({ success: true, cards: sharedCards, audits: sharedAudits });
   });
 
+  app.post('/api/board/clear', (_req, res) => {
+    sharedCards = [];
+    sharedAudits = [];
+    saveBoardToDisk();
+    return res.json({ success: true, message: 'Tablero vaciado con éxito en el servidor.' });
+  });
+
   // Bulk Import cards endpoint (from CSV: Numero;Tipo;Usuario)
   app.post('/api/board/bulk-import', (req, res) => {
     try {

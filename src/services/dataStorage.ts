@@ -382,18 +382,6 @@ export async function pullBoardStateFromServer(): Promise<{ cards: Card[]; audit
     if (!res.ok) return null;
     const data = await res.json();
     if (data && data.success && Array.isArray(data.cards)) {
-      if (data.cards.length === 0) {
-        try {
-          const localRaw = localStorage.getItem(STORAGE_KEYS.CARDS);
-          const localCards: Card[] = localRaw ? JSON.parse(localRaw) : [];
-          if (localCards.length > 0) {
-            saveCards(localCards);
-            return { cards: localCards, audits: data.audits || [] };
-          }
-        } catch {
-          //
-        }
-      }
       safeSetStorage(STORAGE_KEYS.CARDS, JSON.stringify(data.cards));
       if (Array.isArray(data.audits)) {
         safeSetStorage(STORAGE_KEYS.COMPLETED_AUDITS, JSON.stringify(data.audits));
@@ -414,7 +402,12 @@ export function deleteCard(cardId: string): boolean {
 }
 
 export function clearAllCards(): boolean {
-  saveCards([]);
+  safeSetStorage(STORAGE_KEYS.CARDS, JSON.stringify([]));
+  try {
+    fetch('/api/board/clear', { method: 'POST' }).catch(() => {});
+  } catch {
+    //
+  }
   return true;
 }
 
