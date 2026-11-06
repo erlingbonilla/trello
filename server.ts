@@ -517,17 +517,23 @@ async function startServer() {
   }, 1000);
 
   const isProd = process.env.NODE_ENV === 'production';
-  if (!isProd) {
+  const distPath = path.resolve('dist');
+  const indexHtmlPath = path.join(distPath, 'index.html');
+  const hasDist = fs.existsSync(indexHtmlPath);
+
+  if (!isProd || !hasDist) {
+    if (isProd && !hasDist) {
+      console.warn(`[Server] dist/index.html no encontrada en ${distPath}. Montando Vite middleware dinámicamente...`);
+    }
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.resolve('dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      res.sendFile(indexHtmlPath);
     });
   }
 
