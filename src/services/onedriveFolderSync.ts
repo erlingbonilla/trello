@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { parseCsvText } from './fileParser';
+import { parseCsvText, parsePkFile } from './fileParser';
 import { normalizeOrderNumber, normalizeProductCode } from '../utils/productUtils';
 import { LiOrderRecord, TransactionRecord } from '../types';
 
@@ -12,6 +12,9 @@ export interface OneDriveFolderSyncResult {
   prodCount: number;
   liRecords: LiOrderRecord[];
   transactions: TransactionRecord[];
+  pkOrders?: string[];
+  pkFileName?: string;
+  pkMonth?: string;
   timestamp: string;
 }
 
@@ -94,8 +97,21 @@ export async function resolveOneDriveFolderContext(
     f => f.Name.toLowerCase().includes('productividad') && (f.Name.endsWith('.xlsx') || f.Name.endsWith('.csv'))
   );
 
+  // _pk file for current month (e.g. 202611_pk)
+  const now = new Date();
+  const currentYearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const pkFiles = fileEntries.filter(f => f.Name.toLowerCase().includes('_pk'));
+  let currentPkFile = pkFiles.find(f => f.Name.includes(currentYearMonth) || f.Name.startsWith(currentYearMonth));
+  if (!currentPkFile && pkFiles.length > 0) {
+    pkFiles.sort((a, b) => b.Name.localeCompare(a.Name));
+    currentPkFile = pkFiles[0];
+  }
+
   let liRecords: LiOrderRecord[] = [];
   const transactions: TransactionRecord[] = [];
+  let pkOrders: string[] = [];
+  let pkFileName: string = '';
+  let pkMonth: string = currentYearMonth;
 
   // Helper to download file content via GetFileByServerRelativeUrl
   const downloadFile = async (serverRelUrl: string): Promise<ArrayBuffer> => {
@@ -111,7 +127,23 @@ export async function resolveOneDriveFolderContext(
     return await res.arrayBuffer();
   };
 
-  // 4. Download and parse _li
+  // 4. Download and parse _pk for current month
+  if (currentPkFile) {
+    try {
+      pkFileName = currentPkFile.Name;
+      const buffer = await downloadFile(currentPkFile.ServerRelativeUrl);
+      if (currentPkFile.Name.endsWith('.csv')) {
+        const text = new TextDecoder('utf-8').decode(buffer);
+        pkOrders = parsePkFile(text);
+      } else {
+        pkOrders = parsePkFile(buffer);
+      }
+    } catch (err: any) {
+      console.error('Error procesando _pk file:', err);
+    }
+  }
+
+  // 5. Download and parse _li
   if (liFile) {
     try {
       const buffer = await downloadFile(liFile.ServerRelativeUrl);
@@ -305,6 +337,10 @@ function fixSheetRef(sheet: XLSX.WorkSheet) {
     prodCount: deduplicatedTx.filter(t => t.source === 'productividad').length,
     liRecords,
     transactions: deduplicatedTx,
+    pkOrders,
+    pkFileName,
+    pkMonth,
     timestamp: new Date().toISOString(),
   };
 }
+

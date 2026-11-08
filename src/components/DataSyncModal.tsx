@@ -16,6 +16,7 @@ import {
   parseBodegasCsv,
   parseExcelOrCsvTransactions,
   parseLiCsv,
+  parsePkFile,
 } from '../services/fileParser';
 import {
   Cloud,
@@ -286,6 +287,52 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       setFeedback({
         type: 'error',
         message: `Error al leer CSV de bodegas: ${err.message}`,
+      });
+    } finally {
+      setIsProcessing(false);
+      e.target.value = '';
+    }
+  };
+
+  // Handle uploading _pk file (CSV or Excel)
+  const handlePkUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsProcessing(true);
+    setFeedback(null);
+
+    try {
+      let orders: string[] = [];
+      if (file.name.endsWith('.csv')) {
+        const text = await file.text();
+        orders = parsePkFile(text);
+      } else {
+        const buffer = await file.arrayBuffer();
+        orders = parsePkFile(buffer);
+      }
+
+      if (orders.length === 0) {
+        setFeedback({
+          type: 'error',
+          message: 'No se encontraron registros válidos de órdenes (columna CORR.) en el archivo _pk.',
+        });
+      } else {
+        await fetch('/api/onedrive/pk-orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pkOrders: orders, fileName: file.name }),
+        });
+        setFeedback({
+          type: 'success',
+          message: `Archivo _pk ${file.name} cargado exitosamente con ${orders.length} órdenes únicas.`,
+        });
+        onDataRefreshed();
+      }
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: `Error al leer archivo _pk: ${err.message}`,
       });
     } finally {
       setIsProcessing(false);
@@ -618,6 +665,27 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                     type="file"
                     accept=".csv"
                     onChange={handleBodegasUpload}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {/* 5. Archivo _pk (CSV o Excel) */}
+              <div className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-indigo-300 transition-colors">
+                <div className="flex items-center gap-2 mb-1.5 font-bold text-slate-900">
+                  <FileSpreadsheet className="w-4 h-4 text-indigo-600" />
+                  <span>Archivo _pk (ej. 202611_pk)</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mb-2.5">
+                  Contiene correlativos (columna CORR. / PO) para identificar órdenes pendientes del mes actual.
+                </p>
+                <label className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 font-semibold rounded-lg border border-indigo-200 cursor-pointer">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Seleccionar Archivo _pk</span>
+                  <input
+                    type="file"
+                    accept=".csv,.xlsx,.xls"
+                    onChange={handlePkUpload}
                     className="hidden"
                   />
                 </label>

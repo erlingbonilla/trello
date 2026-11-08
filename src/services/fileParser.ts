@@ -189,3 +189,41 @@ export function parseExcelOrCsvTransactions(
 
   return transactions;
 }
+
+export function parsePkFile(data: string | ArrayBuffer): string[] {
+  if (typeof data === 'string') {
+    const rows = parseCsvText(data);
+    if (rows.length < 2) return [];
+    const headers = rows[0].map(h => h.trim().toLowerCase());
+    let corrIdx = headers.findIndex(h => h.includes('corr') || h === 'po' || h.includes('orden') || h.includes('order'));
+    if (corrIdx === -1) corrIdx = 0;
+
+    const orderSet = new Set<string>();
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || row.length === 0) continue;
+      const rawVal = row[corrIdx] || row[0] || '';
+      const norm = normalizeOrderNumber(rawVal);
+      if (norm && norm !== '000000000') {
+        orderSet.add(norm);
+      }
+    }
+    return Array.from(orderSet);
+  } else {
+    const workbook = XLSX.read(data, { type: 'array' });
+    const firstSheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[firstSheetName];
+    const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+
+    const orderSet = new Set<string>();
+    jsonRows.forEach(row => {
+      const rawVal = row['CORR.'] || row['CORR'] || row['Corr.'] || row['Corr'] || row['PO'] || row['Po'] || row['Orden'] || row['Order'] || '';
+      const norm = normalizeOrderNumber(String(rawVal));
+      if (norm && norm !== '000000000') {
+        orderSet.add(norm);
+      }
+    });
+    return Array.from(orderSet);
+  }
+}
+

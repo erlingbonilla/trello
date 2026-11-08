@@ -31,7 +31,9 @@ import { DataSyncModal } from './components/DataSyncModal';
 import { ManageLabelsModal } from './components/ManageLabelsModal';
 import { LoginModal } from './components/LoginModal';
 import { BulkImportModal } from './components/BulkImportModal';
-import { Search, RotateCcw, Layers, Upload, Trash2 } from 'lucide-react';
+import { PkPendingModal } from './components/PkPendingModal';
+import { validateAndCreateCard } from './services/dataStorage';
+import { Search, RotateCcw, Layers, Upload, Trash2, PackageCheck } from 'lucide-react';
 
 export default function App() {
   // Initialization
@@ -126,6 +128,40 @@ export default function App() {
   const [userMgmtOpen, setUserMgmtOpen] = useState(false);
   const [manageLabelsOpen, setManageLabelsOpen] = useState(false);
   const [bulkImportOpen, setBulkImportOpen] = useState(false);
+  const [pkModalOpen, setPkModalOpen] = useState(false);
+
+  const handleCreateCardFromPk = (orderNumber: string, type: 'OV' | 'TR' | 'OF', pickerIds: string[]) => {
+    fetch(`/api/onedrive/order/${orderNumber}`)
+      .then(res => res.json())
+      .then(data => {
+        const prefetchedItems = data && data.items ? data.items : undefined;
+        const result = validateAndCreateCard({
+          type,
+          orderNumber,
+          assignedPickerIds: pickerIds,
+          labels: [type === 'TR' ? 'traslado' : 'ov_tag'],
+          prefetchedItems,
+        });
+        if (result.success) {
+          refreshData();
+        } else {
+          alert(result.message);
+        }
+      })
+      .catch(() => {
+        const result = validateAndCreateCard({
+          type,
+          orderNumber,
+          assignedPickerIds: pickerIds,
+          labels: [type === 'TR' ? 'traslado' : 'ov_tag'],
+        });
+        if (result.success) {
+          refreshData();
+        } else {
+          alert(result.message);
+        }
+      });
+  };
 
   // Filters state
   const [searchFilter, setSearchFilter] = useState('');
@@ -283,14 +319,25 @@ export default function App() {
               {currentUser.role === 'despacho' && 'Despacho (Órdenes en Proceso de Entrega)'}
             </span>
             {(currentUser.role === 'master' || currentUser.role === 'asignador') && (
-              <button
-                onClick={() => setBulkImportOpen(true)}
-                className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 transition-colors shadow-2xs cursor-pointer"
-                title="Subir lote de tarjetas desde archivo CSV o Trello"
-              >
-                <Upload className="w-3 h-3 text-indigo-600" />
-                <span>Subir CSV</span>
-              </button>
+              <>
+                <button
+                  onClick={() => setBulkImportOpen(true)}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-indigo-700 hover:text-indigo-900 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 rounded border border-indigo-200 transition-colors shadow-2xs cursor-pointer"
+                  title="Subir lote de tarjetas desde archivo CSV o Trello"
+                >
+                  <Upload className="w-3 h-3 text-indigo-600" />
+                  <span>Subir CSV</span>
+                </button>
+
+                <button
+                  onClick={() => setPkModalOpen(true)}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-800 hover:text-emerald-950 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-300 transition-colors shadow-2xs cursor-pointer"
+                  title="Ver órdenes ST pendientes del archivo _pk del mes actual"
+                >
+                  <PackageCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Órdenes ST _pk</span>
+                </button>
+              </>
             )}
 
             {currentUser.role === 'master' && (
@@ -532,6 +579,14 @@ export default function App() {
         onClose={() => setBulkImportOpen(false)}
         onSuccess={refreshData}
         allUsers={users}
+      />
+
+      <PkPendingModal
+        isOpen={pkModalOpen}
+        onClose={() => setPkModalOpen(false)}
+        currentUser={currentUser}
+        allUsers={users}
+        onCreateCardFromPk={handleCreateCardFromPk}
       />
     </div>
   );

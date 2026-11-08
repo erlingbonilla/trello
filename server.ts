@@ -18,6 +18,9 @@ async function startServer() {
   let cachedLiOrderMap = new Map<string, any[]>();
   let cachedTxOrderMap = new Map<string, any[]>();
   let cachedProductDescMap = new Map<string, string>();
+  let cachedPkOrders: string[] = [];
+  let cachedPkFileName: string = '';
+  let cachedPkMonth: string = '';
   let isSyncing = false;
   let syncPromise: Promise<any> | null = null;
 
@@ -54,7 +57,14 @@ async function startServer() {
       }
     });
     cachedTxOrderMap = txMap;
+
+    if (Array.isArray(result.pkOrders)) {
+      cachedPkOrders = result.pkOrders;
+      cachedPkFileName = result.pkFileName || '';
+      cachedPkMonth = result.pkMonth || '';
+    }
   };
+
 
   const getProductDesc = (code: string, fallback: string): string => {
     const clean = String(code || '').replace(/^0+/, '').toUpperCase();
@@ -104,6 +114,89 @@ async function startServer() {
       lastSync: cachedSyncResult.timestamp,
     });
   });
+
+  // Endpoint to get unassigned ST orders for the current month's _pk file
+  app.get('/api/onedrive/pk-unassigned', (_req, res) => {
+    const now = new Date();
+    const currentMonthStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+    // Set of orders currently active on the board (not completed)
+    const activeBoardOrders = new Set(
+      sharedCards
+        .filter(c => c.status !== 'completed')
+        .map(c => String(c.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0'))
+    );
+
+    const unassignedOrders: any[] = [];
+
+    cachedPkOrders.forEach(ord => {
+      const cleanOrd = String(ord).replace(/\D/g, '').slice(-9).padStart(9, '0');
+      if (!cleanOrd || cleanOrd === '000000000') return;
+
+      // 1. Skip if order is already active on the board
+      if (activeBoardOrders.has(cleanOrd)) return;
+
+      // 2. Check _li records for this order
+      const liRows = cachedLiOrderMap.get(cleanOrd) || [];
+      const stRows = liRows.filter(r => isSTLocation(r.bodegaCode));
+
+      if (stRows.length === 0) return; // Must have items in ST location
+
+      // 3. Check if WMS transactions already show picking or dispatch activity in ST location
+      const txs = cachedTxOrderMap.get(cleanOrd) || [];
+      const stTxs = txs.filter(t => isSTLocation(t.bodega));
+
+      const hasPickingOrDispatch = stTxs.some(t => {
+        const txType = String(t.transactionType || '').toUpperCase();
+        return (
+          t.cantDelta < 0 ||
+          txType === 'PI' ||
+          txType === 'DL' ||
+          txType === 'PIREQ' ||
+          txType === 'REQDEL' ||
+          txType === 'PIPROD' ||
+          txType === 'TRPROD'
+        );
+      });
+
+      if (hasPickingOrDispatch) return; // Already picked or dispatched in WMS
+
+      const firstRow = stRows[0];
+      unassignedOrders.push({
+        orderNumber: cleanOrd,
+        type: 'OV',
+        client: firstRow.client || `CLIENTE ORDEN ${cleanOrd}`,
+        bodegaCode: firstRow.bodegaCode || '600',
+        items: stRows.map((r, idx) => ({
+          id: `pk_item_${cleanOrd}_${idx}`,
+          productCode: r.productCode,
+          description: r.description,
+          requestedQty: r.requestedQty,
+          bodegaCode: r.bodegaCode,
+        })),
+      });
+    });
+
+    return res.json({
+      success: true,
+      currentMonth: cachedPkMonth || currentMonthStr,
+      fileName: cachedPkFileName || `${currentMonthStr}_pk`,
+      totalPkOrders: cachedPkOrders.length,
+      unassignedCount: unassignedOrders.length,
+      unassignedOrders,
+    });
+  });
+
+  app.post('/api/onedrive/pk-orders', (req, res) => {
+    const { pkOrders, fileName, month } = req.body || {};
+    if (Array.isArray(pkOrders)) {
+      cachedPkOrders = pkOrders;
+      cachedPkFileName = fileName || 'Manual_pk';
+      cachedPkMonth = month || `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    }
+    return res.json({ success: true, count: cachedPkOrders.length });
+  });
+
 
   // Fast O(1) order lookup endpoint from indexed OneDrive cache
   app.get('/api/onedrive/order/:orderNumber', (req, res) => {
