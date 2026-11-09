@@ -85,31 +85,20 @@ export default function App() {
 
   // Schedule-aware background auto-sync poll (every 15s) and on startup
   useEffect(() => {
-    const fetchBatchTxs = () => {
-      const orderNums = getCards().map(c => c.orderNumber);
-      if (orderNums.length > 0) {
-        fetch('/api/onedrive/batch-transactions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderNumbers: orderNums }),
-        })
-          .then(res => res.json())
-          .then(data => {
-            if (data && data.transactions && data.transactions.length > 0) {
-              syncCardsWithTransactions(data.transactions);
-              setCards(getCards());
-            }
-          })
-          .catch(() => {});
-      }
+    const syncWithServer = () => {
+      pullBoardStateFromServer().then(res => {
+        if (res && res.cards) {
+          setCards(res.cards);
+        }
+      });
     };
 
     // Run immediately on mount
-    fetchBatchTxs();
+    syncWithServer();
 
     const syncInterval = setInterval(() => {
       if (isWithinSyncSchedule()) {
-        fetchBatchTxs();
+        syncWithServer();
       }
     }, 15000); // 15 seconds
 

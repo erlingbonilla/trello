@@ -35,7 +35,7 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBodega, setSelectedBodega] = useState<string>('all');
-  const [wmsFilter, setWmsFilter] = useState<'all' | 'sin_iniciar' | 'pickeado'>('all');
+  const [wmsFilter, setWmsFilter] = useState<'all' | 'sin_iniciar' | 'parcial'>('all');
   const [selectedPickersMap, setSelectedPickersMap] = useState<Record<string, string[]>>({});
   const [assigningOrderNum, setAssigningOrderNum] = useState<string | null>(null);
 
@@ -73,7 +73,7 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
   const pickers = allUsers.filter(u => u.role === 'pickeador' || u.role === 'master' || u.role === 'asignador');
 
   const sinIniciarCount = data.unassignedOrders.filter(o => o.wmsStatus === 'sin_iniciar').length;
-  const pickeadoCount = data.unassignedOrders.filter(o => o.wmsStatus === 'pickeado').length;
+  const parcialCount = data.unassignedOrders.filter(o => o.wmsStatus === 'parcial').length;
 
   // Filter orders by search term, selected bodega & WMS status
   const filteredOrders = data.unassignedOrders.filter(ord => {
@@ -94,7 +94,7 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
     const matchesWms =
       wmsFilter === 'all' ||
       (wmsFilter === 'sin_iniciar' && ord.wmsStatus === 'sin_iniciar') ||
-      (wmsFilter === 'pickeado' && ord.wmsStatus === 'pickeado');
+      (wmsFilter === 'parcial' && ord.wmsStatus === 'parcial');
 
     return matchesSearch && matchesBodega && matchesWms;
   });
@@ -206,7 +206,7 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
                 onClick={() => setWmsFilter('sin_iniciar')}
                 className={`px-2.5 py-1 rounded-lg transition-all ${
                   wmsFilter === 'sin_iniciar'
-                    ? 'bg-amber-600 text-white shadow-2xs font-bold'
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -214,14 +214,14 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setWmsFilter('pickeado')}
+                onClick={() => setWmsFilter('parcial')}
                 className={`px-2.5 py-1 rounded-lg transition-all ${
-                  wmsFilter === 'pickeado'
-                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                  wmsFilter === 'parcial'
+                    ? 'bg-amber-600 text-white shadow-2xs font-bold'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Pickeadas en WMS ({pickeadoCount})
+                Pickeo Parcial ({parcialCount})
               </button>
             </div>
           </div>
@@ -297,13 +297,13 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
                           PO: {ord.po}
                         </span>
                       )}
-                      {ord.wmsStatus === 'pickeado' ? (
-                        <span className="bg-blue-50 text-blue-800 border border-blue-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1" title="Esta orden ya registra pickeo en WMS pero no ha sido despachada">
-                          <span>✓ Pickeado en WMS {ord.pickedEmployeeName ? `(${ord.pickedEmployeeName})` : ''}</span>
+                      {ord.wmsStatus === 'parcial' ? (
+                        <span className="bg-amber-50 text-amber-900 border border-amber-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1" title="Esta orden tiene pickeo parcial en WMS pero aún le faltan líneas">
+                          <span>⚡ Pickeo Parcial ({ord.finishedItemsCount}/{ord.totalItemsCount}) {ord.pickedEmployeeName ? `(${ord.pickedEmployeeName})` : ''}</span>
                         </span>
                       ) : (
-                        <span className="bg-amber-50 text-amber-800 border border-amber-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1">
-                          <span>Pendiente de Picking</span>
+                        <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1">
+                          <span>Pendiente de Picking (0%)</span>
                         </span>
                       )}
                       <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1">

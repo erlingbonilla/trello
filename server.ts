@@ -186,15 +186,56 @@ async function startServer() {
 
       if (hasDl) return; // Already finished and dispatched in WMS
 
-      const hasPi = stTxs.some(t => {
-        const txType = String(t.transactionType || '').toUpperCase();
-        return t.cantDelta < 0 && (txType === 'PI' || txType === 'PIREQ' || txType === 'PIPROD');
+      // 4. Calculate picking progress for each ST item
+      let allItemsFinished = true;
+      let anyItemPicked = false;
+      let finishedItemsCount = 0;
+      let piEmployee: string | undefined = undefined;
+
+      const itemsWithProgress = stRows.map((r, idx) => {
+        const rProdClean = String(r.productCode || '').replace(/^0+/, '').toUpperCase();
+        const prodTxs = stTxs.filter(t => {
+          const tProdClean = String(t.productCode || '').replace(/^0+/, '').toUpperCase();
+          return tProdClean === rProdClean;
+        });
+
+        let pickedTotal = 0;
+        prodTxs.forEach(t => {
+          const txType = String(t.transactionType || '').toUpperCase();
+          if (t.cantDelta < 0 && (txType === 'PI' || txType === 'PIREQ' || txType === 'PIPROD')) {
+            pickedTotal += Math.abs(t.cantDelta);
+            if (!piEmployee && t.employeeName) {
+              piEmployee = t.employeeName;
+            }
+          }
+        });
+
+        const req = r.requestedQty || 1;
+        const isItemDone = req > 0 && pickedTotal >= req;
+        if (isItemDone) {
+          finishedItemsCount++;
+          anyItemPicked = true;
+        } else {
+          allItemsFinished = false;
+          if (pickedTotal > 0) anyItemPicked = true;
+        }
+
+        return {
+          id: `pk_item_${realOrderNum}_${idx}`,
+          productCode: r.productCode,
+          description: r.description,
+          requestedQty: req,
+          pickedQty: pickedTotal,
+          bodegaCode: r.bodegaCode,
+          isFinished: isItemDone,
+        };
       });
 
-      const piEmployee = stTxs.find(t => {
-        const txType = String(t.transactionType || '').toUpperCase();
-        return t.cantDelta < 0 && (txType === 'PI' || txType === 'PIREQ' || txType === 'PIPROD');
-      })?.employeeName;
+      // Strict user rule: If the order was ALREADY COMPLETELY PICKED in WMS, omit it!
+      // (It has already been picked, so it does not need to be assigned to the board)
+      if (stRows.length > 0 && allItemsFinished) {
+        return;
+      }
 
       seenOrderNumbers.add(realOrderNum);
 
@@ -204,15 +245,11 @@ async function startServer() {
         type: 'OV',
         client: firstRow.client || `CLIENTE ORDEN ${realOrderNum}`,
         bodegaCode: firstRow.bodegaCode || '600',
-        wmsStatus: hasPi ? 'pickeado' : 'sin_iniciar',
+        wmsStatus: anyItemPicked ? 'parcial' : 'sin_iniciar',
         pickedEmployeeName: piEmployee || undefined,
-        items: stRows.map((r, idx) => ({
-          id: `pk_item_${realOrderNum}_${idx}`,
-          productCode: r.productCode,
-          description: r.description,
-          requestedQty: r.requestedQty,
-          bodegaCode: r.bodegaCode,
-        })),
+        finishedItemsCount,
+        totalItemsCount: stRows.length,
+        items: itemsWithProgress,
       });
     });
 

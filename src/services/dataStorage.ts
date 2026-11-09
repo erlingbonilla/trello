@@ -327,8 +327,8 @@ export function getTransactions(): TransactionRecord[] {
 }
 
 export function saveTransactions(txs: TransactionRecord[]) {
-  // Keep only a safe sliding window of transactions in localStorage (max 250 items)
-  const trimmed = txs.slice(0, 250);
+  // Keep up to 5000 transactions in localStorage without truncating active order lines
+  const trimmed = txs.slice(0, 5000);
   safeSetStorage(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(trimmed));
 }
 
@@ -674,17 +674,21 @@ export function syncCardsWithTransactions(incomingTxs?: TransactionRecord[]): {
   movedToDespachoCount: number;
   completedCount: number;
 } {
+  let transactions = getTransactions();
   if (incomingTxs && incomingTxs.length > 0) {
-    const existing = getTransactions();
+    const existing = transactions;
     const existingIds = new Set(existing.map(e => e.id));
     const toAdd = incomingTxs.filter(t => !existingIds.has(t.id));
     if (toAdd.length > 0) {
-      saveTransactions([...toAdd, ...existing].slice(0, 500));
+      const merged = [...toAdd, ...existing];
+      saveTransactions(merged);
+      transactions = merged;
+    } else {
+      transactions = existing;
     }
   }
 
   const cards = getCards();
-  const transactions = getTransactions();
   const audits = getCompletedAudits();
   const users = getUsers();
   const despachoUser = users.find(u => u.role === 'despacho') || { id: 'user_despacho', name: 'Equipo Despacho' };
