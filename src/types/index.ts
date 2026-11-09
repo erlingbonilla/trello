@@ -37,6 +37,7 @@ export interface Card {
   id: string;
   type: CardType;
   orderNumber: string; // 9 digits
+  po?: string; // Correlative PO matching CORR. in _pk (e.g. 406602)
   client: string;
   assignedPickerIds: string[]; // Pickers assigned to this card
   labels: string[]; // Label IDs
@@ -56,6 +57,7 @@ export interface BodegaCatalogEntry {
 
 export interface LiOrderRecord {
   orderNumber: string; // 9 digits
+  po?: string; // Correlative PO matching CORR. in _pk (e.g. 406602)
   client: string;
   productCode: string;
   description: string;

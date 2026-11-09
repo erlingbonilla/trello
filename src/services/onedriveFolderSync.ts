@@ -154,6 +154,7 @@ export async function resolveOneDriveFolderContext(
         const headers = rows[0].map(h => h.trim().toLowerCase());
         const orderIdx = headers.findIndex(h => h.includes('orden') || h.includes('order'));
         const clientIdx = headers.findIndex(h => h.includes('cliente') || h.includes('customer'));
+        const poIdx = headers.findIndex(h => h === 'po' || h.includes('po') || h.includes('corr'));
         const prodIdx = headers.findIndex(h => (h.includes('producto') || h.includes('item')) && !h.includes('desc'));
         const descIdx = headers.findIndex(h => h.includes('descrip') || h.includes('nombre'));
         const pedidaIdx = headers.findIndex(h => h.includes('cant. pedida') || h.includes('cant. ped') || h.includes('pedida'));
@@ -166,6 +167,7 @@ export async function resolveOneDriveFolderContext(
 
           const rawOrder = orderIdx >= 0 ? row[orderIdx] : row[0];
           const rawClient = clientIdx >= 0 ? row[clientIdx] : row[2] || row[1] || '';
+          const rawPo = poIdx >= 0 ? row[poIdx] : row[3] || '';
           const rawProd = prodIdx >= 0 ? row[prodIdx] : row[4] || row[2] || '';
           const rawDesc = descIdx >= 0 ? row[descIdx] : row[5] || row[3] || '';
           const rawBodega = bodegaIdx >= 0 ? row[bodegaIdx] : row[6] || row[5] || '600';
@@ -174,8 +176,11 @@ export async function resolveOneDriveFolderContext(
           const orderNumber = normalizeOrderNumber(rawOrder);
           if (!orderNumber || orderNumber === '000000000') continue;
 
+          const cleanPo = String(rawPo).trim().replace(/\D/g, '').replace(/^0+/, '');
+
           liRecords.push({
             orderNumber,
+            po: cleanPo || undefined,
             client: rawClient.trim(),
             productCode: normalizeProductCode(rawProd),
             description: rawDesc.trim(),

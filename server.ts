@@ -16,6 +16,7 @@ async function startServer() {
   // In-memory cache for OneDrive synced data & O(1) fast indexed maps
   let cachedSyncResult: any = null;
   let cachedLiOrderMap = new Map<string, any[]>();
+  let cachedLiPoMap = new Map<string, any[]>();
   let cachedTxOrderMap = new Map<string, any[]>();
   let cachedProductDescMap = new Map<string, string>();
   let cachedPkOrders: string[] = [];
@@ -27,12 +28,20 @@ async function startServer() {
   const rebuildIndexes = (result: any) => {
     if (!result) return;
     const liMap = new Map<string, any[]>();
+    const poMap = new Map<string, any[]>();
     const prodDescMap = new Map<string, string>();
     (result.liRecords || []).forEach((r: any) => {
       const k = String(r.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
       if (k && k !== '000000000') {
         if (!liMap.has(k)) liMap.set(k, []);
         liMap.get(k)!.push(r);
+      }
+      if (r.po) {
+        const cleanPo = String(r.po).trim().replace(/\D/g, '').replace(/^0+/, '');
+        if (cleanPo) {
+          if (!poMap.has(cleanPo)) poMap.set(cleanPo, []);
+          poMap.get(cleanPo)!.push(r);
+        }
       }
       const rawProd = String(r.productCode || '').trim();
       const cleanProd = rawProd.replace(/^0+/, '').toUpperCase();
@@ -41,6 +50,7 @@ async function startServer() {
       }
     });
     cachedLiOrderMap = liMap;
+    cachedLiPoMap = poMap;
     cachedProductDescMap = prodDescMap;
 
     const txMap = new Map<string, any[]>();
@@ -124,51 +134,80 @@ async function startServer() {
     const activeBoardOrders = new Set(
       sharedCards
         .filter(c => c.status !== 'completed')
-        .map(c => String(c.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0'))
+        .flatMap(c => {
+          const ord = String(c.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+          const po = c.po ? String(c.po).replace(/\D/g, '').replace(/^0+/, '') : '';
+          return [ord, po].filter(Boolean);
+        })
     );
 
     const unassignedOrders: any[] = [];
+    const seenOrderNumbers = new Set<string>();
 
     cachedPkOrders.forEach(ord => {
-      const cleanOrd = String(ord).replace(/\D/g, '').slice(-9).padStart(9, '0');
-      if (!cleanOrd || cleanOrd === '000000000') return;
+      const rawCorr = String(ord || '').trim();
+      const cleanCorr = rawCorr.replace(/\D/g, '').replace(/^0+/, '');
+      if (!cleanCorr) return;
 
-      // 1. Skip if order is already active on the board
-      if (activeBoardOrders.has(cleanOrd)) return;
+      // Match in _li: CORR. in _pk is the PO in _li
+      let liRows = cachedLiPoMap.get(cleanCorr);
+      if (!liRows || liRows.length === 0) {
+        const norm9 = rawCorr.replace(/\D/g, '').slice(-9).padStart(9, '0');
+        liRows = cachedLiOrderMap.get(norm9);
+      }
 
-      // 2. Check _li records for this order
-      const liRows = cachedLiOrderMap.get(cleanOrd) || [];
+      if (!liRows || liRows.length === 0) return;
+
+      const firstRow = liRows[0];
+      const realOrderNum = String(firstRow.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+      if (!realOrderNum || realOrderNum === '000000000') return;
+
+      // Deduplicate if multiple pk rows refer to the same order
+      if (seenOrderNumbers.has(realOrderNum)) return;
+
+      // 1. Skip if order is already active on the board (by orderNumber or by PO)
+      if (activeBoardOrders.has(realOrderNum) || activeBoardOrders.has(cleanCorr)) return;
+
+      // 2. Check _li records for this order: filter items in ST location
       const stRows = liRows.filter(r => isSTLocation(r.bodegaCode));
-
       if (stRows.length === 0) return; // Must have items in ST location
 
-      // 3. Check if WMS transactions already show picking or dispatch activity in ST location
-      const txs = cachedTxOrderMap.get(cleanOrd) || [];
+      // 3. Check if WMS transactions already show DL (already dispatched/closed)
+      const txs = [
+        ...(cachedTxOrderMap.get(realOrderNum) || []),
+        ...(cleanCorr !== realOrderNum ? (cachedTxOrderMap.get(cleanCorr) || []) : []),
+      ];
       const stTxs = txs.filter(t => isSTLocation(t.bodega));
 
-      const hasPickingOrDispatch = stTxs.some(t => {
+      const hasDl = stTxs.some(t => {
         const txType = String(t.transactionType || '').toUpperCase();
-        return (
-          t.cantDelta < 0 ||
-          txType === 'PI' ||
-          txType === 'DL' ||
-          txType === 'PIREQ' ||
-          txType === 'REQDEL' ||
-          txType === 'PIPROD' ||
-          txType === 'TRPROD'
-        );
+        return t.cantDelta < 0 && (txType === 'DL' || txType === 'REQDEL' || txType === 'TRPROD');
       });
 
-      if (hasPickingOrDispatch) return; // Already picked or dispatched in WMS
+      if (hasDl) return; // Already finished and dispatched in WMS
 
-      const firstRow = stRows[0];
+      const hasPi = stTxs.some(t => {
+        const txType = String(t.transactionType || '').toUpperCase();
+        return t.cantDelta < 0 && (txType === 'PI' || txType === 'PIREQ' || txType === 'PIPROD');
+      });
+
+      const piEmployee = stTxs.find(t => {
+        const txType = String(t.transactionType || '').toUpperCase();
+        return t.cantDelta < 0 && (txType === 'PI' || txType === 'PIREQ' || txType === 'PIPROD');
+      })?.employeeName;
+
+      seenOrderNumbers.add(realOrderNum);
+
       unassignedOrders.push({
-        orderNumber: cleanOrd,
+        orderNumber: realOrderNum,
+        po: cleanCorr,
         type: 'OV',
-        client: firstRow.client || `CLIENTE ORDEN ${cleanOrd}`,
+        client: firstRow.client || `CLIENTE ORDEN ${realOrderNum}`,
         bodegaCode: firstRow.bodegaCode || '600',
+        wmsStatus: hasPi ? 'pickeado' : 'sin_iniciar',
+        pickedEmployeeName: piEmployee || undefined,
         items: stRows.map((r, idx) => ({
-          id: `pk_item_${cleanOrd}_${idx}`,
+          id: `pk_item_${realOrderNum}_${idx}`,
           productCode: r.productCode,
           description: r.description,
           requestedQty: r.requestedQty,
@@ -197,8 +236,7 @@ async function startServer() {
     return res.json({ success: true, count: cachedPkOrders.length });
   });
 
-
-  // Fast O(1) order lookup endpoint from indexed OneDrive cache
+  // Fast O(1) order lookup endpoint from indexed OneDrive cache (supports Order # and PO)
   app.get('/api/onedrive/order/:orderNumber', (req, res) => {
     const targetOrder = String(req.params.orderNumber).trim();
     if (!cachedSyncResult) {
@@ -206,13 +244,25 @@ async function startServer() {
     }
 
     const cleanTarget = targetOrder.replace(/\D/g, '').slice(-9).padStart(9, '0');
-    const matches = cachedLiOrderMap.get(cleanTarget) || [];
-    const txMatches = cachedTxOrderMap.get(cleanTarget) || [];
+    const cleanPo = targetOrder.replace(/\D/g, '').replace(/^0+/, '');
+
+    // Check by 9-digit order number OR by PO
+    let matches = cachedLiOrderMap.get(cleanTarget);
+    if (!matches || matches.length === 0) {
+      matches = cachedLiPoMap.get(cleanPo) || [];
+    }
+
+    const effectiveOrderNum = matches.length > 0 ? matches[0].orderNumber : cleanTarget;
+    const txMatches = [
+      ...(cachedTxOrderMap.get(effectiveOrderNum) || []),
+      ...(cleanPo && cleanPo !== effectiveOrderNum ? (cachedTxOrderMap.get(cleanPo) || []) : []),
+    ];
 
     if (matches.length > 0) {
       return res.json({
         success: true,
-        orderNumber: targetOrder,
+        orderNumber: matches[0].orderNumber,
+        po: matches[0].po || cleanPo,
         client: matches[0].client,
         items: matches,
         transactions: txMatches,
@@ -775,34 +825,41 @@ async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
   const distPath = path.resolve('dist');
   const indexHtmlPath = path.join(distPath, 'index.html');
-  let hasDist = fs.existsSync(indexHtmlPath);
 
-  // If in production and dist/index.html is missing (e.g. Render build command didn't run vite build), auto-build!
-  if (isProd && !hasDist) {
-    console.log('[Server] dist/index.html no encontrada en producción. Compilando aplicación con Vite build...');
-    try {
-      await viteBuild();
-      hasDist = fs.existsSync(indexHtmlPath);
-      console.log('[Server] Compilación automática de producción completada con éxito.');
-    } catch (buildErr: any) {
-      console.error('[Server] Falló compilación automática de Vite:', buildErr.message);
+  if (isProd) {
+    // Production mode: serve pre-built dist assets
+    if (!fs.existsSync(indexHtmlPath)) {
+      console.log('[Server] dist/index.html no encontrada en producción. Compilando aplicación con Vite build...');
+      try {
+        await viteBuild();
+        console.log('[Server] Compilación de producción completada con éxito.');
+      } catch (buildErr: any) {
+        console.error('[Server] Falló compilación de Vite:', buildErr.message);
+      }
     }
-  }
 
-  if (hasDist) {
     app.use(express.static(distPath, { index: false }));
-    app.get('*', (_req, res) => {
-      res.sendFile(indexHtmlPath);
+    app.get('*', (_req, res, next) => {
+      if (fs.existsSync(indexHtmlPath)) {
+        res.sendFile(indexHtmlPath, (err) => {
+          if (err) next(err);
+        });
+      } else {
+        // Fallback if dist was deleted or not yet built
+        res.sendFile(path.resolve('index.html'), (err) => {
+          if (err) next(err);
+        });
+      }
     });
   } else {
-    // Development or fallback Vite middleware mode
+    // Development mode: always mount Vite dev middlewares
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
 
-    // Critical: transform and return index.html for any unhandled GET route so requests never hang
+    // Transform and return index.html for any unhandled GET route
     app.get('*', async (req, res, next) => {
       try {
         const url = req.originalUrl;

@@ -112,6 +112,11 @@ export const CardView: React.FC<CardViewProps> = ({
             <span className="font-mono text-base font-black tracking-tight text-white drop-shadow-xs">
               #{card.orderNumber}
             </span>
+            {card.po && (
+              <span className="text-[10px] bg-white/20 text-white font-mono font-bold px-1.5 py-0.5 rounded shadow-2xs" title={`PO / Correlativo: ${card.po}`}>
+                PO: {card.po}
+              </span>
+            )}
             {isDespachoCard && (
               <span className="text-[10px] bg-amber-400 text-amber-950 font-bold px-1.5 py-0.5 rounded shadow-2xs">
                 Despacho

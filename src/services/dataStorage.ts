@@ -496,6 +496,7 @@ export function validateAndCreateCard(input: CreateCardInput): CreateCardResult 
   let clientName = input.customClient?.trim() || '';
   let items: CardItem[] = [];
   let hasNonStBodega = false;
+  let cardPo: string | undefined = (input.prefetchedItems as any)?.[0]?.po;
 
   if (input.type === 'OV') {
     // 1. Search in prefetched items or in local _li cache by Orden #
@@ -511,6 +512,7 @@ export function validateAndCreateCard(input: CreateCardInput): CreateCardResult 
     }
 
     clientName = clientName || sourceRows[0].client || 'Cliente Sin Nombre';
+    cardPo = cardPo || sourceRows[0].po;
 
     // 2. Filter products: check Bodega location ST vs others
     sourceRows.forEach((row: any, idx: number) => {
@@ -633,6 +635,7 @@ export function validateAndCreateCard(input: CreateCardInput): CreateCardResult 
     id: `card_${Date.now()}_${cleanOrderNum}`,
     type: input.type,
     orderNumber: cleanOrderNum,
+    po: cardPo,
     client: clientName || `CLIENTE ORDEN ${cleanOrderNum}`,
     assignedPickerIds: input.assignedPickerIds,
     labels: labelsToApply,

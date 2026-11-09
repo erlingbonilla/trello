@@ -48,6 +48,7 @@ export function parseLiCsv(csvContent: string): LiOrderRecord[] {
   // Find column indices
   const orderIdx = headers.findIndex(h => h.includes('orden') || h.includes('order') || h === 'orden #');
   const clientIdx = headers.findIndex(h => h.includes('cliente') || h.includes('customer') || h.includes('nombre cliente'));
+  const poIdx = headers.findIndex(h => h === 'po' || h.includes('po') || h.includes('corr'));
   const prodIdx = headers.findIndex(h => (h.includes('producto') || h.includes('item') || h.includes('articulo') || h.includes('material')) && !h.includes('desc'));
   const descIdx = headers.findIndex(h => h.includes('descrip') || h.includes('nombre producto') || h.includes('texto'));
   const qtyIdx = headers.findIndex(h => h.includes('cant') || h.includes('pedida') || h.includes('cantidad') || h.includes('qty'));
@@ -59,9 +60,10 @@ export function parseLiCsv(csvContent: string): LiOrderRecord[] {
     const row = rows[i];
     if (row.length < 3) continue;
 
-    // Support both header matching and positional layout seen in user screenshot (Col 0: Orden, Col 2: Cliente, Col 4: Producto, Col 5: Descripcion, Col 6: Bodega, Col 7: Cantidad)
+    // Support both header matching and positional layout seen in user screenshot (Col 0: Orden, Col 2: Cliente, Col 3: PO, Col 4: Producto, Col 5: Descripcion, Col 6: Bodega, Col 7: Cantidad)
     const rawOrder = orderIdx >= 0 ? row[orderIdx] : row[0];
     const rawClient = clientIdx >= 0 ? row[clientIdx] : row[2] || row[1] || '';
+    const rawPo = poIdx >= 0 ? row[poIdx] : row[3] || '';
     const rawProd = prodIdx >= 0 ? row[prodIdx] : row[4] || row[2] || '';
     const rawDesc = descIdx >= 0 ? row[descIdx] : row[5] || row[3] || '';
     const rawBodega = bodegaIdx >= 0 ? row[bodegaIdx] : row[6] || row[5] || '600';
@@ -72,9 +74,11 @@ export function parseLiCsv(csvContent: string): LiOrderRecord[] {
 
     const cleanQty = parseFloat(rawQty.replace(',', '.')) || 1;
     const productCode = normalizeProductCode(rawProd);
+    const cleanPo = String(rawPo).trim().replace(/\D/g, '').replace(/^0+/, '');
 
     records.push({
       orderNumber,
+      po: cleanPo || undefined,
       client: rawClient.trim(),
       productCode,
       description: rawDesc.trim(),
@@ -191,6 +195,10 @@ export function parseExcelOrCsvTransactions(
 }
 
 export function parsePkFile(data: string | ArrayBuffer): string[] {
+  const cleanCorr = (val: any): string => {
+    return String(val || '').trim().replace(/\D/g, '').replace(/^0+/, '');
+  };
+
   if (typeof data === 'string') {
     const rows = parseCsvText(data);
     if (rows.length < 2) return [];
@@ -203,9 +211,9 @@ export function parsePkFile(data: string | ArrayBuffer): string[] {
       const row = rows[i];
       if (!row || row.length === 0) continue;
       const rawVal = row[corrIdx] || row[0] || '';
-      const norm = normalizeOrderNumber(rawVal);
-      if (norm && norm !== '000000000') {
-        orderSet.add(norm);
+      const clean = cleanCorr(rawVal);
+      if (clean) {
+        orderSet.add(clean);
       }
     }
     return Array.from(orderSet);
@@ -218,9 +226,9 @@ export function parsePkFile(data: string | ArrayBuffer): string[] {
     const orderSet = new Set<string>();
     jsonRows.forEach(row => {
       const rawVal = row['CORR.'] || row['CORR'] || row['Corr.'] || row['Corr'] || row['PO'] || row['Po'] || row['Orden'] || row['Order'] || '';
-      const norm = normalizeOrderNumber(String(rawVal));
-      if (norm && norm !== '000000000') {
-        orderSet.add(norm);
+      const clean = cleanCorr(rawVal);
+      if (clean) {
+        orderSet.add(clean);
       }
     });
     return Array.from(orderSet);

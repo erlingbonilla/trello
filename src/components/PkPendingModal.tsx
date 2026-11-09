@@ -35,6 +35,7 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedBodega, setSelectedBodega] = useState<string>('all');
+  const [wmsFilter, setWmsFilter] = useState<'all' | 'sin_iniciar' | 'pickeado'>('all');
   const [selectedPickersMap, setSelectedPickersMap] = useState<Record<string, string[]>>({});
   const [assigningOrderNum, setAssigningOrderNum] = useState<string | null>(null);
 
@@ -71,21 +72,31 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
 
   const pickers = allUsers.filter(u => u.role === 'pickeador' || u.role === 'master' || u.role === 'asignador');
 
-  // Filter orders by search term & selected bodega
+  const sinIniciarCount = data.unassignedOrders.filter(o => o.wmsStatus === 'sin_iniciar').length;
+  const pickeadoCount = data.unassignedOrders.filter(o => o.wmsStatus === 'pickeado').length;
+
+  // Filter orders by search term, selected bodega & WMS status
   const filteredOrders = data.unassignedOrders.filter(ord => {
+    const term = searchTerm.trim().toLowerCase();
     const matchesSearch =
-      searchTerm.trim() === '' ||
-      ord.orderNumber.includes(searchTerm.trim()) ||
-      ord.client.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      term === '' ||
+      ord.orderNumber.toLowerCase().includes(term) ||
+      (ord.po && String(ord.po).toLowerCase().includes(term)) ||
+      ord.client.toLowerCase().includes(term) ||
       (ord.items || []).some(
         (it: any) =>
-          it.productCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          it.description.toLowerCase().includes(searchTerm.toLowerCase())
+          it.productCode.toLowerCase().includes(term) ||
+          it.description.toLowerCase().includes(term)
       );
 
     const matchesBodega = selectedBodega === 'all' || ord.bodegaCode === selectedBodega;
 
-    return matchesSearch && matchesBodega;
+    const matchesWms =
+      wmsFilter === 'all' ||
+      (wmsFilter === 'sin_iniciar' && ord.wmsStatus === 'sin_iniciar') ||
+      (wmsFilter === 'pickeado' && ord.wmsStatus === 'pickeado');
+
+    return matchesSearch && matchesBodega && matchesWms;
   });
 
   // Group by Bodega
@@ -170,17 +181,48 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
 
         {/* Stats Banner & Filters */}
         <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-4 text-xs">
+          <div className="flex flex-wrap items-center gap-3 text-xs">
             <div className="bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs flex items-center gap-2">
               <Layers className="w-4 h-4 text-indigo-600" />
               <span className="text-slate-500">Total en _pk mes:</span>
               <span className="font-mono font-bold text-slate-900">{data.totalPkOrders} órdenes</span>
             </div>
 
-            <div className="bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-200/80 shadow-2xs flex items-center gap-2">
-              <PackageCheck className="w-4 h-4 text-amber-600" />
-              <span className="text-amber-800 font-medium">Pendientes sin asignar ST:</span>
-              <span className="font-mono font-bold text-amber-950 text-sm">{data.unassignedCount}</span>
+            {/* WMS Segmented Filter Tabs */}
+            <div className="flex items-center bg-slate-200/80 p-0.5 rounded-xl text-xs font-semibold">
+              <button
+                type="button"
+                onClick={() => setWmsFilter('all')}
+                className={`px-2.5 py-1 rounded-lg transition-all ${
+                  wmsFilter === 'all'
+                    ? 'bg-white text-slate-900 shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Todas ({data.unassignedOrders.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setWmsFilter('sin_iniciar')}
+                className={`px-2.5 py-1 rounded-lg transition-all ${
+                  wmsFilter === 'sin_iniciar'
+                    ? 'bg-amber-600 text-white shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Sin Iniciar Pickeo ({sinIniciarCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setWmsFilter('pickeado')}
+                className={`px-2.5 py-1 rounded-lg transition-all ${
+                  wmsFilter === 'pickeado'
+                    ? 'bg-blue-600 text-white shadow-2xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Pickeadas en WMS ({pickeadoCount})
+              </button>
             </div>
           </div>
 
@@ -208,7 +250,7 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Filtrar por orden, cliente..."
+                placeholder="Filtrar por orden, PO / CORR, cliente..."
                 value={searchTerm}
                 onChange={e => setSearchTerm(e.target.value)}
                 className="w-full pl-8 pr-3 py-1 bg-white border border-slate-200 rounded-lg text-xs focus:outline-hidden focus:border-indigo-500"
@@ -229,7 +271,7 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
               <PackageCheck className="w-12 h-12 text-emerald-500 mx-auto mb-2 opacity-80" />
               <h4 className="text-base font-bold text-slate-800">¡Todas las órdenes ST están asignadas o procesadas!</h4>
               <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-                No hay órdenes pendientes en el archivo <span className="font-mono font-bold text-slate-700">{data.fileName || '_pk'}</span> que cumplan con los criterios de estar sin asignar en el tablero y sin movimiento WMS.
+                No hay órdenes pendientes en el archivo <span className="font-mono font-bold text-slate-700">{data.fileName || '_pk'}</span> que cumplan con los filtros seleccionados.
               </p>
             </div>
           ) : (
@@ -250,6 +292,20 @@ export const PkPendingModal: React.FC<PkPendingModalProps> = ({
                       <span className="font-mono text-base font-black text-slate-900">
                         #{ord.orderNumber}
                       </span>
+                      {ord.po && (
+                        <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 font-mono font-bold text-[10.5px] px-2 py-0.5 rounded-md" title="Correlativo PO del archivo _pk">
+                          PO: {ord.po}
+                        </span>
+                      )}
+                      {ord.wmsStatus === 'pickeado' ? (
+                        <span className="bg-blue-50 text-blue-800 border border-blue-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1" title="Esta orden ya registra pickeo en WMS pero no ha sido despachada">
+                          <span>✓ Pickeado en WMS {ord.pickedEmployeeName ? `(${ord.pickedEmployeeName})` : ''}</span>
+                        </span>
+                      ) : (
+                        <span className="bg-amber-50 text-amber-800 border border-amber-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1">
+                          <span>Pendiente de Picking</span>
+                        </span>
+                      )}
                       <span className="bg-slate-100 text-slate-700 border border-slate-200 font-bold text-[10.5px] px-2 py-0.5 rounded-md flex items-center gap-1">
                         <Warehouse className="w-3 h-3 text-slate-500" />
                         <span>Bodega: {getBodegaName(ord.bodegaCode)}</span>
