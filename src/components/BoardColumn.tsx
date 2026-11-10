@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, User } from '../types';
 import { CardView } from './CardView';
 import { Truck, User as UserIcon, Plus } from 'lucide-react';
@@ -15,6 +15,8 @@ interface BoardColumnProps {
   onDelete: (cardId: string) => void;
   onQuickCreateForPicker?: (pickerId: string) => void;
   onDropCardOnPicker?: (cardId: string, pickerId: string) => void;
+  onReorderCard?: (cardId: string, pickerId: string, targetIndex: number) => void;
+  onMoveCard?: (cardId: string, pickerId: string, direction: 'up' | 'down') => void;
   isSingleColumn?: boolean;
 }
 
@@ -30,44 +32,98 @@ export const BoardColumn: React.FC<BoardColumnProps> = ({
   onDelete,
   onQuickCreateForPicker,
   onDropCardOnPicker,
+  onReorderCard,
+  onMoveCard,
   isSingleColumn = false,
 }) => {
   const canModify = currentUser.role === 'master' || currentUser.role === 'asignador';
+
+  const [dragOverCardId, setDragOverCardId] = useState<string | null>(null);
+  const [dropPosition, setDropPosition] = useState<'above' | 'below' | null>(null);
+  const [isColumnDragOver, setIsColumnDragOver] = useState(false);
 
   // Stats for this picker's cards
   const ovCount = cards.filter(c => c.type === 'OV').length;
   const trCount = cards.filter(c => c.type === 'TR').length;
   const ofCount = cards.filter(c => c.type === 'OF').length;
 
-  // Drag and drop handlers
-  const handleDragOver = (e: React.DragEvent) => {
+  // Drag and drop handlers on Column level
+  const handleColumnDragOver = (e: React.DragEvent) => {
     if (!canModify || isDespacho) return;
     e.preventDefault();
-    e.currentTarget.classList.add('bg-emerald-50/50');
+    setIsColumnDragOver(true);
   };
 
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.currentTarget.classList.remove('bg-emerald-50/50');
+  const handleColumnDragLeave = (e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+      setIsColumnDragOver(false);
+      setDragOverCardId(null);
+      setDropPosition(null);
+    }
   };
 
-  const handleDrop = (e: React.DragEvent) => {
+  const handleColumnDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    e.currentTarget.classList.remove('bg-emerald-50/50');
+    setIsColumnDragOver(false);
+    setDragOverCardId(null);
+    setDropPosition(null);
     if (!canModify || isDespacho) return;
     const cardId = e.dataTransfer.getData('text/plain');
-    if (cardId && onDropCardOnPicker) {
+    if (!cardId) return;
+
+    if (onReorderCard) {
+      onReorderCard(cardId, user.id, cards.length);
+    } else if (onDropCardOnPicker) {
       onDropCardOnPicker(cardId, user.id);
+    }
+  };
+
+  // Drag and drop handlers on Individual Card level
+  const handleCardDragOver = (e: React.DragEvent, cardId: string) => {
+    if (!canModify || isDespacho) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const isAbove = relY < rect.height / 2;
+    setDragOverCardId(cardId);
+    setDropPosition(isAbove ? 'above' : 'below');
+  };
+
+  const handleCardDragLeave = (e: React.DragEvent) => {
+    e.stopPropagation();
+  };
+
+  const handleCardDrop = (e: React.DragEvent, targetCardId: string, targetIdx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsColumnDragOver(false);
+    const pos = dropPosition;
+    setDragOverCardId(null);
+    setDropPosition(null);
+
+    if (!canModify || isDespacho) return;
+    const draggedCardId = e.dataTransfer.getData('text/plain');
+    if (!draggedCardId) return;
+
+    const insertIndex = pos === 'below' ? targetIdx + 1 : targetIdx;
+    if (onReorderCard) {
+      onReorderCard(draggedCardId, user.id, insertIndex);
+    } else if (onDropCardOnPicker) {
+      onDropCardOnPicker(draggedCardId, user.id);
     }
   };
 
   return (
     <div
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragOver={handleColumnDragOver}
+      onDragLeave={handleColumnDragLeave}
+      onDrop={handleColumnDrop}
       className={`${
         isSingleColumn ? 'w-full max-w-lg mx-auto' : 'w-80 sm:w-84 md:w-88 shrink-0'
       } flex flex-col rounded-xl transition-colors border shadow-xs max-h-[calc(100vh-140px)] ${
+        isColumnDragOver ? 'ring-2 ring-emerald-500 bg-emerald-50/40' : ''
+      } ${
         isDespacho
           ? 'bg-slate-100/90 border-slate-300'
           : 'bg-slate-100 border-slate-200'
@@ -141,25 +197,56 @@ export const BoardColumn: React.FC<BoardColumnProps> = ({
             </p>
           </div>
         ) : (
-          cards.map(card => (
-            <div
-              key={card.id}
-              draggable={canModify && !isDespacho}
-              onDragStart={e => {
-                e.dataTransfer.setData('text/plain', card.id);
-              }}
-            >
-              <CardView
-                card={card}
-                currentUser={currentUser}
-                allUsers={allUsers}
-                onOpenDetail={onOpenDetail}
-                onEditLabels={onEditLabels}
-                onReassign={onReassign}
-                onDelete={onDelete}
-              />
-            </div>
-          ))
+          cards.map((card, index) => {
+            const isTarget = dragOverCardId === card.id;
+
+            return (
+              <div key={card.id} className="relative transition-all">
+                {/* Visual Drop Line Above Card */}
+                {isTarget && dropPosition === 'above' && (
+                  <div className="h-1.5 bg-emerald-500 rounded-full mb-1.5 shadow-sm ring-2 ring-emerald-200 animate-pulse" />
+                )}
+
+                <div
+                  draggable={canModify && !isDespacho}
+                  onDragStart={e => {
+                    e.dataTransfer.setData('text/plain', card.id);
+                  }}
+                  onDragOver={e => handleCardDragOver(e, card.id)}
+                  onDragLeave={handleCardDragLeave}
+                  onDrop={e => handleCardDrop(e, card.id, index)}
+                  className={`transition-transform ${isTarget ? 'scale-[0.99]' : ''}`}
+                >
+                  <CardView
+                    card={card}
+                    positionIndex={index}
+                    totalInColumn={cards.length}
+                    currentUser={currentUser}
+                    allUsers={allUsers}
+                    onOpenDetail={onOpenDetail}
+                    onEditLabels={onEditLabels}
+                    onReassign={onReassign}
+                    onDelete={onDelete}
+                    onMoveUp={
+                      canModify && !isDespacho && onMoveCard
+                        ? () => onMoveCard(card.id, user.id, 'up')
+                        : undefined
+                    }
+                    onMoveDown={
+                      canModify && !isDespacho && onMoveCard
+                        ? () => onMoveCard(card.id, user.id, 'down')
+                        : undefined
+                    }
+                  />
+                </div>
+
+                {/* Visual Drop Line Below Card */}
+                {isTarget && dropPosition === 'below' && (
+                  <div className="h-1.5 bg-emerald-500 rounded-full mt-1.5 shadow-sm ring-2 ring-emerald-200 animate-pulse" />
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>

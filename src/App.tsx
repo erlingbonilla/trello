@@ -32,7 +32,7 @@ import { ManageLabelsModal } from './components/ManageLabelsModal';
 import { LoginModal } from './components/LoginModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { PkPendingModal } from './components/PkPendingModal';
-import { validateAndCreateCard } from './services/dataStorage';
+import { validateAndCreateCard, reorderCard, moveCardPosition } from './services/dataStorage';
 import { Search, RotateCcw, Layers, Upload, Trash2, PackageCheck } from 'lucide-react';
 
 export default function App() {
@@ -188,6 +188,18 @@ export default function App() {
     const card = cards.find(c => c.id === cardId);
     if (!card) return;
     reassignCard(cardId, [targetPickerId]);
+    refreshData();
+  };
+
+  // Manual reorder card handler (drag & drop into specific position in column)
+  const handleReorderCard = (cardId: string, targetPickerId: string, targetIndex: number) => {
+    reorderCard(cardId, targetPickerId, targetIndex);
+    refreshData();
+  };
+
+  // Move card position handler (one step up or down via button)
+  const handleMoveCard = (cardId: string, pickerId: string, direction: 'up' | 'down') => {
+    moveCardPosition(cardId, pickerId, direction);
     refreshData();
   };
 
@@ -430,12 +442,14 @@ export default function App() {
             <div className={`flex items-start gap-4 pb-4 ${isSingleCol ? 'w-full max-w-lg mx-auto justify-center' : 'min-w-max'}`}>
               {/* Picker Columns (Each pickeador is a Trello List) */}
               {visibleColumns.map(picker => {
-                const pickerCards = filteredCards.filter(
-                  c =>
-                    c.status === 'picking' &&
-                    (c.assignedPickerIds || []).includes(picker.id) &&
-                    !((c.items || []).length > 0 && (c.items || []).every(i => i.isFinished || (i.pickedQty || 0) >= i.requestedQty))
-                );
+                const pickerCards = filteredCards
+                  .filter(
+                    c =>
+                      c.status === 'picking' &&
+                      (c.assignedPickerIds || []).includes(picker.id) &&
+                      !((c.items || []).length > 0 && (c.items || []).every(i => i.isFinished || (i.pickedQty || 0) >= i.requestedQty))
+                  )
+                  .sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
 
                 return (
                   <BoardColumn
@@ -453,6 +467,8 @@ export default function App() {
                       setCreateCardOpen(true);
                     }}
                     onDropCardOnPicker={handleDropCardOnPicker}
+                    onReorderCard={handleReorderCard}
+                    onMoveCard={handleMoveCard}
                     isSingleColumn={isSingleCol}
                   />
                 );

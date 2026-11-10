@@ -47,6 +47,7 @@ export interface Card {
   isMulti: boolean; // Has products with warehouse locations other than ST
   status: 'picking' | 'despacho' | 'completed';
   despachoCardId?: string; // Reference to dispatched copy if separated
+  orderIndex?: number; // Manual priority position in picker column
 }
 
 export interface BodegaCatalogEntry {

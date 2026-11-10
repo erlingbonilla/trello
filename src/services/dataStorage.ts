@@ -432,6 +432,59 @@ export function updateCardLabels(cardId: string, labels: string[]): boolean {
   return true;
 }
 
+export function reorderCard(cardId: string, targetPickerId: string, newIndex: number): boolean {
+  const cards = getCards();
+  const cardIndex = cards.findIndex(c => c.id === cardId);
+  if (cardIndex === -1) return false;
+
+  const card = cards[cardIndex];
+
+  // Update picker assignment if changed
+  if (targetPickerId && (!card.assignedPickerIds.includes(targetPickerId) || card.assignedPickerIds.length !== 1)) {
+    card.assignedPickerIds = [targetPickerId];
+  }
+  card.updatedAt = new Date().toISOString();
+
+  // Get all active cards for this target picker in their current order
+  const pickerCards = cards.filter(
+    c => c.status === 'picking' && (c.assignedPickerIds || []).includes(targetPickerId)
+  );
+  pickerCards.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+  // Remove the dragged card from pickerCards if already present
+  const remainingPickerCards = pickerCards.filter(c => c.id !== cardId);
+
+  // Clamp target index
+  const clampedIndex = Math.max(0, Math.min(newIndex, remainingPickerCards.length));
+
+  // Insert card at clampedIndex
+  remainingPickerCards.splice(clampedIndex, 0, card);
+
+  // Assign clean sequential orderIndex to preserve exact user priority
+  remainingPickerCards.forEach((c, idx) => {
+    c.orderIndex = idx;
+  });
+
+  saveCards(cards);
+  return true;
+}
+
+export function moveCardPosition(cardId: string, pickerId: string, direction: 'up' | 'down'): boolean {
+  const cards = getCards();
+  const pickerCards = cards.filter(
+    c => c.status === 'picking' && (c.assignedPickerIds || []).includes(pickerId)
+  );
+  pickerCards.sort((a, b) => (a.orderIndex ?? 0) - (b.orderIndex ?? 0));
+
+  const idx = pickerCards.findIndex(c => c.id === cardId);
+  if (idx === -1) return false;
+
+  const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
+  if (targetIdx < 0 || targetIdx >= pickerCards.length) return false;
+
+  return reorderCard(cardId, pickerId, targetIdx);
+}
+
 // Card creation validation and processing
 export interface CreateCardInput {
   type: CardType;

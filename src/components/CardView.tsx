@@ -3,26 +3,34 @@ import { Card, User } from '../types';
 import { getLabelById } from '../data/labels';
 import { getTimeElapsed } from '../utils/timeAgo';
 import { INITIAL_BODEGAS } from '../data/bodegasCatalog';
-import { Clock, Trash2, Tag, ArrowRightLeft, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Clock, Trash2, Tag, ArrowRightLeft, CheckCircle2, AlertCircle, ChevronUp, ChevronDown, GripVertical } from 'lucide-react';
 
 interface CardViewProps {
   card: Card;
   currentUser: User;
   allUsers: User[];
+  positionIndex?: number;
+  totalInColumn?: number;
   onOpenDetail: (card: Card) => void;
   onEditLabels: (card: Card) => void;
   onReassign: (card: Card) => void;
   onDelete: (cardId: string) => void;
+  onMoveUp?: (cardId: string) => void;
+  onMoveDown?: (cardId: string) => void;
 }
 
 export const CardView: React.FC<CardViewProps> = ({
   card,
   currentUser,
   allUsers,
+  positionIndex,
+  totalInColumn,
   onOpenDetail,
   onEditLabels,
   onReassign,
   onDelete,
+  onMoveUp,
+  onMoveDown,
 }) => {
   const canModify = currentUser.role === 'master' || currentUser.role === 'asignador';
   const isDespachoCard = card.status === 'despacho';
@@ -115,6 +123,11 @@ export const CardView: React.FC<CardViewProps> = ({
             {card.po && (
               <span className="text-[10px] bg-white/20 text-white font-mono font-bold px-1.5 py-0.5 rounded shadow-2xs" title={`PO / Correlativo: ${card.po}`}>
                 PO: {card.po}
+              </span>
+            )}
+            {positionIndex !== undefined && !isDespachoCard && (
+              <span className="text-[10.5px] bg-black/35 text-amber-300 font-mono font-bold px-1.5 py-0.5 rounded shadow-2xs" title={`Prioridad #${positionIndex + 1} en cola de este pickeador`}>
+                #{positionIndex + 1}
               </span>
             )}
             {isDespachoCard && (
@@ -292,30 +305,56 @@ export const CardView: React.FC<CardViewProps> = ({
         {/* Action icons for Master/Asignador */}
         {canModify && !isDespachoCard && (
           <div
-            className="flex items-center gap-1 text-slate-400 opacity-60 group-hover:opacity-100 transition-opacity"
+            className="flex items-center gap-0.5 text-slate-400 opacity-70 group-hover:opacity-100 transition-opacity"
             onClick={e => e.stopPropagation()}
           >
+            {/* Quick Priority Reordering (Move Up / Down) */}
+            {onMoveUp && (
+              <button
+                disabled={positionIndex === 0}
+                onClick={() => onMoveUp(card.id)}
+                className="p-1 hover:text-indigo-700 hover:bg-indigo-50 rounded transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
+                title={positionIndex === 0 ? 'Es la primera orden en la lista' : 'Subir prioridad (mover arriba)'}
+              >
+                <ChevronUp className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {onMoveDown && (
+              <button
+                disabled={positionIndex !== undefined && totalInColumn !== undefined && positionIndex >= totalInColumn - 1}
+                onClick={() => onMoveDown(card.id)}
+                className="p-1 hover:text-indigo-700 hover:bg-indigo-50 rounded transition-colors disabled:opacity-20 disabled:hover:bg-transparent"
+                title={positionIndex !== undefined && totalInColumn !== undefined && positionIndex >= totalInColumn - 1 ? 'Es la última orden en la lista' : 'Bajar prioridad (mover abajo)'}
+              >
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+            )}
+
             <button
               onClick={() => onEditLabels(card)}
-              className="p-1 hover:text-slate-700 hover:bg-slate-100 rounded"
+              className="p-1 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
               title="Cambiar Etiquetas"
             >
               <Tag className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => onReassign(card)}
-              className="p-1 hover:text-slate-700 hover:bg-slate-100 rounded"
+              className="p-1 hover:text-slate-700 hover:bg-slate-100 rounded transition-colors"
               title="Reasignar Pickeador"
             >
               <ArrowRightLeft className="w-3.5 h-3.5" />
             </button>
             <button
               onClick={() => onDelete(card.id)}
-              className="p-1 hover:text-red-600 hover:bg-red-50 rounded"
+              className="p-1 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
               title="Eliminar Tarjeta"
             >
               <Trash2 className="w-3.5 h-3.5" />
             </button>
+
+            <span className="p-1 text-slate-400 cursor-grab active:cursor-grabbing hover:text-slate-600" title="Arrastrar para mover">
+              <GripVertical className="w-3.5 h-3.5" />
+            </span>
           </div>
         )}
       </div>
