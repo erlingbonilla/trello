@@ -32,8 +32,9 @@ import { ManageLabelsModal } from './components/ManageLabelsModal';
 import { LoginModal } from './components/LoginModal';
 import { BulkImportModal } from './components/BulkImportModal';
 import { PkPendingModal } from './components/PkPendingModal';
+import * as XLSX from 'xlsx';
 import { validateAndCreateCard, reorderCard, moveCardPosition } from './services/dataStorage';
-import { Search, RotateCcw, Layers, Upload, Trash2, PackageCheck } from 'lucide-react';
+import { Search, RotateCcw, Layers, Upload, Trash2, PackageCheck, Download } from 'lucide-react';
 
 export default function App() {
   // Initialization
@@ -219,6 +220,77 @@ export default function App() {
     }
   };
 
+  const handleExportBoard = (format: 'xlsx' | 'csv') => {
+    const userMap = new Map(users.map((u, idx) => [u.id, { name: u.name, order: idx }]));
+    const rawRows: Array<{
+      pickerOrder: number;
+      orderIndex: number;
+      Numero: string;
+      Tipo: string;
+      Pickeador: string;
+    }> = [];
+
+    cards
+      .filter(c => c.status !== 'completed')
+      .forEach(c => {
+        const pickerIds =
+          Array.isArray(c.assignedPickerIds) && c.assignedPickerIds.length > 0
+            ? c.assignedPickerIds
+            : ['__unassigned__'];
+
+        pickerIds.forEach(pid => {
+          const userInfo = userMap.get(pid);
+          const pickerName =
+            pid === '__unassigned__'
+              ? 'Sin asignar'
+              : userInfo?.name || pid.replace(/^picker_/, '').replace(/^user_/, '');
+
+          rawRows.push({
+            pickerOrder: userInfo?.order ?? 999,
+            orderIndex: c.orderIndex ?? 0,
+            Numero: String(c.orderNumber || ''),
+            Tipo: c.type,
+            Pickeador: pickerName,
+          });
+        });
+      });
+
+    rawRows.sort((a, b) => a.pickerOrder - b.pickerOrder || a.orderIndex - b.orderIndex);
+
+    const exportRows = rawRows.map(({ Numero, Tipo, Pickeador }) => ({
+      Numero,
+      Tipo,
+      Pickeador,
+    }));
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+
+    if (format === 'csv') {
+      const header = 'Numero;Tipo;Pickeador';
+      const lines = exportRows.map(r => `${r.Numero};${r.Tipo};${r.Pickeador}`);
+      const csvContent = '\uFEFF' + [header, ...lines].join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `ordenes_tablero_${dateStr}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      return;
+    }
+
+    const ws = XLSX.utils.json_to_sheet(
+      exportRows.length > 0 ? exportRows : [{ Numero: '', Tipo: '', Pickeador: '' }],
+      { header: ['Numero', 'Tipo', 'Pickeador'] }
+    );
+    ws['!cols'] = [{ wch: 16 }, { wch: 8 }, { wch: 24 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Ordenes');
+    XLSX.writeFile(wb, `ordenes_tablero_${dateStr}.xlsx`);
+  };
+
   // Filtered cards
   const filteredCards = useMemo(() => {
     return cards.filter(card => {
@@ -337,6 +409,26 @@ export default function App() {
                 >
                   <PackageCheck className="w-3.5 h-3.5 text-emerald-600" />
                   <span>Órdenes ST _pk</span>
+                </button>
+
+                <button
+                  onClick={() => handleExportBoard('xlsx')}
+                  disabled={cards.filter(c => c.status !== 'completed').length === 0}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-sky-800 hover:text-sky-950 bg-sky-50 hover:bg-sky-100 px-2 py-0.5 rounded border border-sky-300 transition-colors shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Descargar listado Excel (Número, Tipo y Pickeador)"
+                >
+                  <Download className="w-3 h-3 text-sky-600" />
+                  <span>Descargar Excel</span>
+                </button>
+
+                <button
+                  onClick={() => handleExportBoard('csv')}
+                  disabled={cards.filter(c => c.status !== 'completed').length === 0}
+                  className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-700 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-300 transition-colors shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Descargar CSV (Numero;Tipo;Pickeador)"
+                >
+                  <Download className="w-3 h-3 text-slate-500" />
+                  <span>CSV</span>
                 </button>
               </>
             )}

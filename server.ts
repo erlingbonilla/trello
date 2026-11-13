@@ -2,10 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import express from 'express';
 import { createServer as createViteServer, build as viteBuild } from 'vite';
+import * as XLSX from 'xlsx';
 import { resolveOneDriveFolderContext } from './src/services/onedriveFolderSync';
 import { isWithinSyncSchedule, getSyncScheduleInfo } from './src/utils/syncSchedule';
 import { isSTLocation } from './src/data/bodegasCatalog';
 import { INITIAL_SEEDED_CARDS } from './src/data/initialSeededCards';
+import { INITIAL_USERS } from './src/data/initialUsers';
 
 async function startServer() {
   const app = express();
@@ -618,6 +620,75 @@ async function startServer() {
     sharedAudits = [];
     saveBoardToDisk();
     return res.json({ success: true, message: 'Tablero vaciado con éxito en el servidor.' });
+  });
+
+  // Export active board cards (strictly Numero, Tipo, Pickeador)
+  app.get('/api/board/export', (req, res) => {
+    const format = String(req.query.format || 'xlsx').toLowerCase();
+    const userMap = new Map(INITIAL_USERS.map((u, idx) => [u.id, { name: u.name, order: idx }]));
+
+    const rawRows: Array<{
+      pickerOrder: number;
+      orderIndex: number;
+      Numero: string;
+      Tipo: string;
+      Pickeador: string;
+    }> = [];
+
+    sharedCards
+      .filter((c: any) => c.status !== 'completed')
+      .forEach((c: any) => {
+        const pickerIds: string[] = Array.isArray(c.assignedPickerIds) && c.assignedPickerIds.length > 0
+          ? c.assignedPickerIds
+          : ['__unassigned__'];
+
+        pickerIds.forEach((pid: string) => {
+          const userInfo = userMap.get(pid);
+          const pickerName =
+            pid === '__unassigned__'
+              ? 'Sin asignar'
+              : userInfo?.name || pid.replace(/^picker_/, '').replace(/^user_/, '');
+          rawRows.push({
+            pickerOrder: userInfo?.order ?? 999,
+            orderIndex: c.orderIndex ?? 0,
+            Numero: String(c.orderNumber || ''),
+            Tipo: String(c.type || 'OV'),
+            Pickeador: pickerName,
+          });
+        });
+      });
+
+    rawRows.sort((a, b) => a.pickerOrder - b.pickerOrder || a.orderIndex - b.orderIndex);
+
+    const exportRows = rawRows.map(({ Numero, Tipo, Pickeador }) => ({
+      Numero,
+      Tipo,
+      Pickeador,
+    }));
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+
+    if (format === 'csv') {
+      const header = 'Numero;Tipo;Pickeador';
+      const lines = exportRows.map(r => `${r.Numero};${r.Tipo};${r.Pickeador}`);
+      const csvContent = '\uFEFF' + [header, ...lines].join('\n');
+      res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="ordenes_tablero_${dateStr}.csv"`);
+      return res.send(csvContent);
+    }
+
+    const ws = XLSX.utils.json_to_sheet(
+      exportRows.length > 0 ? exportRows : [{ Numero: '', Tipo: '', Pickeador: '' }],
+      { header: ['Numero', 'Tipo', 'Pickeador'] }
+    );
+    ws['!cols'] = [{ wch: 16 }, { wch: 8 }, { wch: 24 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Ordenes');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="ordenes_tablero_${dateStr}.xlsx"`);
+    return res.send(buf);
   });
 
   // Bulk Import cards endpoint (from CSV: Numero;Tipo;Usuario)
