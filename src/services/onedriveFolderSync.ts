@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
-import { parseCsvText, parsePkFile } from './fileParser';
+import { parseCsvText, parsePkRecords } from './fileParser';
 import { normalizeOrderNumber, normalizeProductCode } from '../utils/productUtils';
-import { LiOrderRecord, TransactionRecord } from '../types';
+import { LiOrderRecord, TransactionRecord, PkOrderRecord } from '../types';
 
 export interface OneDriveFolderSyncResult {
   success: boolean;
@@ -13,6 +13,7 @@ export interface OneDriveFolderSyncResult {
   liRecords: LiOrderRecord[];
   transactions: TransactionRecord[];
   pkOrders?: string[];
+  pkRecords?: PkOrderRecord[];
   pkFileName?: string;
   pkMonth?: string;
   timestamp: string;
@@ -110,6 +111,7 @@ export async function resolveOneDriveFolderContext(
   let liRecords: LiOrderRecord[] = [];
   const transactions: TransactionRecord[] = [];
   let pkOrders: string[] = [];
+  let pkRecords: PkOrderRecord[] = [];
   let pkFileName: string = '';
   let pkMonth: string = currentYearMonth;
 
@@ -134,10 +136,11 @@ export async function resolveOneDriveFolderContext(
       const buffer = await downloadFile(currentPkFile.ServerRelativeUrl);
       if (currentPkFile.Name.endsWith('.csv')) {
         const text = new TextDecoder('utf-8').decode(buffer);
-        pkOrders = parsePkFile(text);
+        pkRecords = parsePkRecords(text);
       } else {
-        pkOrders = parsePkFile(buffer);
+        pkRecords = parsePkRecords(buffer);
       }
+      pkOrders = pkRecords.map(r => r.corr);
     } catch (err: any) {
       console.error('Error procesando _pk file:', err);
     }
@@ -343,6 +346,7 @@ function fixSheetRef(sheet: XLSX.WorkSheet) {
     liRecords,
     transactions: deduplicatedTx,
     pkOrders,
+    pkRecords,
     pkFileName,
     pkMonth,
     timestamp: new Date().toISOString(),

@@ -22,6 +22,7 @@ async function startServer() {
   let cachedTxOrderMap = new Map<string, any[]>();
   let cachedProductDescMap = new Map<string, string>();
   let cachedPkOrders: string[] = [];
+  let cachedPkMap = new Map<string, { fechaImp?: string; horaImp?: string }>();
   let cachedPkFileName: string = '';
   let cachedPkMonth: string = '';
   let isSyncing = false;
@@ -75,6 +76,31 @@ async function startServer() {
       cachedPkFileName = result.pkFileName || '';
       cachedPkMonth = result.pkMonth || '';
     }
+    if (Array.isArray(result.pkRecords)) {
+      const pkMap = new Map<string, { fechaImp?: string; horaImp?: string }>();
+      result.pkRecords.forEach((rec: any) => {
+        if (rec && rec.corr) {
+          pkMap.set(String(rec.corr).trim(), {
+            fechaImp: rec.fechaImp,
+            horaImp: rec.horaImp,
+          });
+        }
+      });
+      cachedPkMap = pkMap;
+    }
+  };
+
+  const resolvePkInfo = (orderNumber: string, existingPo?: string): { po?: string; fechaImp?: string; horaImp?: string } => {
+    const cleanOrd = String(orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+    const cleanExistingPo = existingPo ? String(existingPo).trim().replace(/\D/g, '').replace(/^0+/, '') : '';
+    const liPo = (cachedLiOrderMap.get(cleanOrd) || [])[0]?.po;
+    const resolvedPo = cleanExistingPo || (liPo ? String(liPo).trim().replace(/\D/g, '').replace(/^0+/, '') : '');
+    const pkEntry = (resolvedPo ? cachedPkMap.get(resolvedPo) : undefined) || cachedPkMap.get(cleanOrd.replace(/^0+/, ''));
+    return {
+      po: resolvedPo || undefined,
+      fechaImp: pkEntry?.fechaImp,
+      horaImp: pkEntry?.horaImp,
+    };
   };
 
 
@@ -241,12 +267,16 @@ async function startServer() {
 
       seenOrderNumbers.add(realOrderNum);
 
+      const pkEntry = cachedPkMap.get(cleanCorr);
+
       unassignedOrders.push({
         orderNumber: realOrderNum,
         po: cleanCorr,
         type: 'OV',
         client: firstRow.client || `CLIENTE ORDEN ${realOrderNum}`,
         bodegaCode: firstRow.bodegaCode || '600',
+        fechaImp: pkEntry?.fechaImp,
+        horaImp: pkEntry?.horaImp,
         wmsStatus: anyItemPicked ? 'parcial' : 'sin_iniciar',
         pickedEmployeeName: piEmployee || undefined,
         finishedItemsCount,
@@ -266,11 +296,23 @@ async function startServer() {
   });
 
   app.post('/api/onedrive/pk-orders', (req, res) => {
-    const { pkOrders, fileName, month } = req.body || {};
+    const { pkOrders, pkRecords, fileName, month } = req.body || {};
     if (Array.isArray(pkOrders)) {
       cachedPkOrders = pkOrders;
       cachedPkFileName = fileName || 'Manual_pk';
       cachedPkMonth = month || `${new Date().getFullYear()}${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    }
+    if (Array.isArray(pkRecords)) {
+      const pkMap = new Map<string, { fechaImp?: string; horaImp?: string }>();
+      pkRecords.forEach((rec: any) => {
+        if (rec && rec.corr) {
+          pkMap.set(String(rec.corr).trim(), {
+            fechaImp: rec.fechaImp,
+            horaImp: rec.horaImp,
+          });
+        }
+      });
+      cachedPkMap = pkMap;
     }
     return res.json({ success: true, count: cachedPkOrders.length });
   });
@@ -298,10 +340,13 @@ async function startServer() {
     ];
 
     if (matches.length > 0) {
+      const pkInfo = resolvePkInfo(matches[0].orderNumber, matches[0].po || cleanPo);
       return res.json({
         success: true,
         orderNumber: matches[0].orderNumber,
-        po: matches[0].po || cleanPo,
+        po: pkInfo.po || matches[0].po || cleanPo,
+        fechaImp: pkInfo.fechaImp,
+        horaImp: pkInfo.horaImp,
         client: matches[0].client,
         items: matches,
         transactions: txMatches,
@@ -421,6 +466,18 @@ async function startServer() {
 
     sharedCards.forEach((card: any) => {
       const cleanTarget = String(card.orderNumber || '').replace(/\D/g, '').slice(-9).padStart(9, '0');
+
+      // Attach PO, FECHA IMP & HORA IMP from _li and _pk automatically
+      const pkInfo = resolvePkInfo(cleanTarget, card.po);
+      if (pkInfo.po && !card.po) {
+        card.po = pkInfo.po;
+      }
+      if (pkInfo.fechaImp) {
+        card.fechaImp = pkInfo.fechaImp;
+      }
+      if (pkInfo.horaImp) {
+        card.horaImp = pkInfo.horaImp;
+      }
 
       // Strict filter:
       // 1. Only transactions in location ST
@@ -835,10 +892,15 @@ async function startServer() {
         const labels = [cardType === 'TR' ? 'traslado' : 'ov_tag'];
         if (hasNonSt) labels.push('multi');
 
+        const pkInfo = resolvePkInfo(ord);
+
         newCards.push({
           id: `card_${Date.now()}_${ord}`,
           type: cardType,
           orderNumber: ord,
+          po: pkInfo.po,
+          fechaImp: pkInfo.fechaImp,
+          horaImp: pkInfo.horaImp,
           client: clientName,
           assignedPickerIds: pickers,
           labels,

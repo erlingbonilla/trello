@@ -74,6 +74,9 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
   const [isSyncingOneDrive, setIsSyncingOneDrive] = useState(false);
   const [currentOrderLookup, setCurrentOrderLookup] = useState<{
     client: string;
+    po?: string;
+    fechaImp?: string;
+    horaImp?: string;
     items: any[];
     transactions: any[];
   } | null>(null);
@@ -160,6 +163,9 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
           if (data.success && data.items && data.items.length > 0) {
             setCurrentOrderLookup({
               client: data.client,
+              po: data.po,
+              fechaImp: data.fechaImp,
+              horaImp: data.horaImp,
               items: data.items,
               transactions: data.transactions || [],
             });
@@ -331,6 +337,9 @@ export const CreateCardModal: React.FC<CreateCardModalProps> = ({
       assignedPickerIds: selectedPickers,
       labels: selectedLabels,
       customClient: clientFound || undefined,
+      po: currentOrderLookup?.po,
+      fechaImp: currentOrderLookup?.fechaImp,
+      horaImp: currentOrderLookup?.horaImp,
       prefetchedItems: currentOrderLookup?.items,
       prefetchedTransactions: currentOrderLookup?.transactions,
     });

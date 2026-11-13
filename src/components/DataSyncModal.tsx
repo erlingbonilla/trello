@@ -16,7 +16,7 @@ import {
   parseBodegasCsv,
   parseExcelOrCsvTransactions,
   parseLiCsv,
-  parsePkFile,
+  parsePkRecords,
 } from '../services/fileParser';
 import {
   Cloud,
@@ -303,14 +303,15 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     setFeedback(null);
 
     try {
-      let orders: string[] = [];
+      let records: import('../types').PkOrderRecord[] = [];
       if (file.name.endsWith('.csv')) {
         const text = await file.text();
-        orders = parsePkFile(text);
+        records = parsePkRecords(text);
       } else {
         const buffer = await file.arrayBuffer();
-        orders = parsePkFile(buffer);
+        records = parsePkRecords(buffer);
       }
+      const orders = records.map(r => r.corr);
 
       if (orders.length === 0) {
         setFeedback({
@@ -321,7 +322,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         await fetch('/api/onedrive/pk-orders', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pkOrders: orders, fileName: file.name }),
+          body: JSON.stringify({ pkOrders: orders, pkRecords: records, fileName: file.name }),
         });
         setFeedback({
           type: 'success',

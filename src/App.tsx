@@ -130,6 +130,9 @@ export default function App() {
           orderNumber,
           assignedPickerIds: pickerIds,
           labels: [type === 'TR' ? 'traslado' : 'ov_tag'],
+          po: data?.po,
+          fechaImp: data?.fechaImp,
+          horaImp: data?.horaImp,
           prefetchedItems,
         });
         if (result.success) {
@@ -641,6 +644,10 @@ export default function App() {
         onClose={() => setSummaryOpen(false)}
         cards={cards}
         allUsers={users}
+        onSelectCard={card => {
+          setSummaryOpen(false);
+          setSelectedCardForDetail(card);
+        }}
       />
 
       <SearchModal

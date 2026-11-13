@@ -48,6 +48,14 @@ export interface Card {
   status: 'picking' | 'despacho' | 'completed';
   despachoCardId?: string; // Reference to dispatched copy if separated
   orderIndex?: number; // Manual priority position in picker column
+  fechaImp?: string; // FECHA IMP from _pk file (DD/MM/YYYY)
+  horaImp?: string; // HORA IMP from _pk file (HH:MM)
+}
+
+export interface PkOrderRecord {
+  corr: string;
+  fechaImp?: string;
+  horaImp?: string;
 }
 
 export interface BodegaCatalogEntry {

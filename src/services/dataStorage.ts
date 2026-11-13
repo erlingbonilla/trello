@@ -492,6 +492,9 @@ export interface CreateCardInput {
   assignedPickerIds: string[];
   labels: string[];
   customClient?: string;
+  po?: string;
+  fechaImp?: string;
+  horaImp?: string;
   prefetchedItems?: any[];
   prefetchedTransactions?: TransactionRecord[];
   includeAllBodegas?: boolean;
@@ -688,7 +691,9 @@ export function validateAndCreateCard(input: CreateCardInput): CreateCardResult 
     id: `card_${Date.now()}_${cleanOrderNum}`,
     type: input.type,
     orderNumber: cleanOrderNum,
-    po: cardPo,
+    po: input.po || cardPo,
+    fechaImp: input.fechaImp,
+    horaImp: input.horaImp,
     client: clientName || `CLIENTE ORDEN ${cleanOrderNum}`,
     assignedPickerIds: input.assignedPickerIds,
     labels: labelsToApply,

@@ -3,7 +3,7 @@ import { Card, User } from '../types';
 import { getLabelById } from '../data/labels';
 import { getTimeElapsed } from '../utils/timeAgo';
 import { INITIAL_BODEGAS } from '../data/bodegasCatalog';
-import { Clock, Trash2, Tag, ArrowRightLeft, CheckCircle2, AlertCircle, ChevronUp, ChevronDown, GripVertical } from 'lucide-react';
+import { Clock, Trash2, Tag, ArrowRightLeft, CheckCircle2, AlertCircle, ChevronUp, ChevronDown, GripVertical, Printer } from 'lucide-react';
 
 interface CardViewProps {
   card: Card;
@@ -153,6 +153,19 @@ export const CardView: React.FC<CardViewProps> = ({
           >
             {card.client}
           </h4>
+
+          {/* Invoice Print Date & Time from _pk (FECHA IMP + HORA IMP) */}
+          {(card.fechaImp || card.horaImp) && (
+            <div className="text-[10px] font-medium text-slate-600 flex items-center gap-1 mb-1">
+              <Printer className="w-3 h-3 text-indigo-500 shrink-0" />
+              <span className="font-bold text-slate-500 text-[9px] uppercase tracking-wider shrink-0">
+                Imp. Factura:
+              </span>
+              <span className="font-mono font-bold text-slate-800 tabular-nums truncate">
+                {card.fechaImp || '--/--/----'}{card.horaImp ? ` · ${card.horaImp}` : ''}
+              </span>
+            </div>
+          )}
 
           {/* Bodega Location */}
           <div className="text-[10.5px] font-medium text-slate-600 flex items-center gap-1 mb-2">

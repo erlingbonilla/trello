@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { BodegaCatalogEntry, LiOrderRecord, TransactionRecord } from '../types';
+import { BodegaCatalogEntry, LiOrderRecord, TransactionRecord, PkOrderRecord } from '../types';
 import { normalizeProductCode, normalizeOrderNumber } from '../utils/productUtils';
 
 export function parseCsvText(text: string, delimiter?: string): string[][] {
@@ -194,10 +194,58 @@ export function parseExcelOrCsvTransactions(
   return transactions;
 }
 
-export function parsePkFile(data: string | ArrayBuffer): string[] {
+function normalizeFechaImp(val: any): string | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  if (typeof val === 'number' && !isNaN(val)) {
+    const parsed = XLSX.SSF.parse_date_code(val);
+    if (parsed && parsed.y && parsed.m && parsed.d) {
+      return `${String(parsed.d).padStart(2, '0')}/${String(parsed.m).padStart(2, '0')}/${parsed.y}`;
+    }
+  }
+  const s = String(val).trim();
+  if (!s || s === '1/1/1900' || s === '01/01/1900') return undefined;
+
+  // Match d/m/yyyy or dd/mm/yyyy or dd-mm-yyyy
+  const dmy = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (dmy) {
+    const day = dmy[1].padStart(2, '0');
+    const month = dmy[2].padStart(2, '0');
+    const year = dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3];
+    return `${day}/${month}/${year}`;
+  }
+
+  // Match yyyy-mm-dd
+  const ymd = s.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})$/);
+  if (ymd) {
+    return `${ymd[3].padStart(2, '0')}/${ymd[2].padStart(2, '0')}/${ymd[1]}`;
+  }
+
+  return s;
+}
+
+function normalizeHoraImp(val: any): string | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  if (typeof val === 'number' && !isNaN(val)) {
+    const totalMinutes = Math.round(val * 24 * 60) % (24 * 60);
+    const hrs = Math.floor(totalMinutes / 60);
+    const mins = totalMinutes % 60;
+    return `${String(hrs).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
+  }
+  const s = String(val).trim();
+  if (!s || s === '00:00:00') return undefined;
+  const hm = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (hm) {
+    return `${hm[1].padStart(2, '0')}:${hm[2]}`;
+  }
+  return s;
+}
+
+export function parsePkRecords(data: string | ArrayBuffer): PkOrderRecord[] {
   const cleanCorr = (val: any): string => {
     return String(val || '').trim().replace(/\D/g, '').replace(/^0+/, '');
   };
+
+  const recordMap = new Map<string, PkOrderRecord>();
 
   if (typeof data === 'string') {
     const rows = parseCsvText(data);
@@ -205,33 +253,52 @@ export function parsePkFile(data: string | ArrayBuffer): string[] {
     const headers = rows[0].map(h => h.trim().toLowerCase());
     let corrIdx = headers.findIndex(h => h.includes('corr') || h === 'po' || h.includes('orden') || h.includes('order'));
     if (corrIdx === -1) corrIdx = 0;
+    const fechaImpIdx = headers.findIndex(h => h.includes('fecha imp') || h === 'fecha_imp' || h === 'fechaimp');
+    const horaImpIdx = headers.findIndex(h => h.includes('hora imp') || h === 'hora_imp' || h === 'horaimp');
 
-    const orderSet = new Set<string>();
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (!row || row.length === 0) continue;
       const rawVal = row[corrIdx] || row[0] || '';
       const clean = cleanCorr(rawVal);
       if (clean) {
-        orderSet.add(clean);
+        const fechaImp = fechaImpIdx >= 0 ? normalizeFechaImp(row[fechaImpIdx]) : undefined;
+        const horaImp = horaImpIdx >= 0 ? normalizeHoraImp(row[horaImpIdx]) : undefined;
+        const existing = recordMap.get(clean);
+        if (!existing || (!existing.fechaImp && fechaImp)) {
+          recordMap.set(clean, { corr: clean, fechaImp, horaImp });
+        }
       }
     }
-    return Array.from(orderSet);
+    return Array.from(recordMap.values());
   } else {
     const workbook = XLSX.read(data, { type: 'array' });
     const firstSheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[firstSheetName];
     const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-    const orderSet = new Set<string>();
     jsonRows.forEach(row => {
       const rawVal = row['CORR.'] || row['CORR'] || row['Corr.'] || row['Corr'] || row['PO'] || row['Po'] || row['Orden'] || row['Order'] || '';
       const clean = cleanCorr(rawVal);
       if (clean) {
-        orderSet.add(clean);
+        // Flexible case-insensitive lookup for FECHA IMP and HORA IMP
+        const rowKeys = Object.keys(row);
+        const fechaKey = rowKeys.find(k => k.trim().toUpperCase() === 'FECHA IMP' || k.trim().toUpperCase() === 'FECHA_IMP');
+        const horaKey = rowKeys.find(k => k.trim().toUpperCase() === 'HORA IMP' || k.trim().toUpperCase() === 'HORA_IMP');
+        const fechaImp = fechaKey ? normalizeFechaImp(row[fechaKey]) : undefined;
+        const horaImp = horaKey ? normalizeHoraImp(row[horaKey]) : undefined;
+        const existing = recordMap.get(clean);
+        if (!existing || (!existing.fechaImp && fechaImp)) {
+          recordMap.set(clean, { corr: clean, fechaImp, horaImp });
+        }
       }
     });
-    return Array.from(orderSet);
+    return Array.from(recordMap.values());
   }
 }
+
+export function parsePkFile(data: string | ArrayBuffer): string[] {
+  return parsePkRecords(data).map(r => r.corr);
+}
+
 
