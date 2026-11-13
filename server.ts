@@ -154,7 +154,14 @@ async function startServer() {
   });
 
   // Endpoint to get unassigned ST orders for the current month's _pk file
-  app.get('/api/onedrive/pk-unassigned', (_req, res) => {
+  app.get('/api/onedrive/pk-unassigned', async (_req, res) => {
+    if (!cachedSyncResult || cachedLiOrderMap.size === 0) {
+      try {
+        await performFolderSync();
+      } catch (err: any) {
+        console.warn('[pk-unassigned] Auto-sync failed:', err.message);
+      }
+    }
     const now = new Date();
     const currentMonthStr = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
 
@@ -318,8 +325,15 @@ async function startServer() {
   });
 
   // Fast O(1) order lookup endpoint from indexed OneDrive cache (supports Order # and PO)
-  app.get('/api/onedrive/order/:orderNumber', (req, res) => {
+  app.get('/api/onedrive/order/:orderNumber', async (req, res) => {
     const targetOrder = String(req.params.orderNumber).trim();
+    if (!cachedSyncResult || cachedLiOrderMap.size === 0) {
+      try {
+        await performFolderSync();
+      } catch (err: any) {
+        console.warn('[order lookup] Auto-sync failed:', err.message);
+      }
+    }
     if (!cachedSyncResult) {
       return res.status(404).json({ success: false, message: 'OneDrive aún no sincronizado en servidor.' });
     }
@@ -749,20 +763,54 @@ async function startServer() {
   });
 
   // Bulk Import cards endpoint (from CSV: Numero;Tipo;Usuario)
-  app.post('/api/board/bulk-import', (req, res) => {
+  app.post('/api/board/bulk-import', async (req, res) => {
     try {
       const items: Array<{ orderNumber: string; type: string; username: string }> = req.body?.items || [];
+      const clientUsers: Array<{ id: string; username?: string; name?: string }> = Array.isArray(req.body?.users)
+        ? req.body.users
+        : [];
       if (!Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ success: false, message: 'No se recibieron filas válidas para importar.' });
+      }
+
+      // Ensure OneDrive _li cache is populated before validating OV/TR orders
+      if (!cachedSyncResult || cachedLiOrderMap.size === 0) {
+        try {
+          console.log('[Bulk Import] Caché de OneDrive vacío en servidor. Sincronizando antes de importar...');
+          await performFolderSync();
+        } catch (syncErr: any) {
+          return res.status(503).json({
+            success: false,
+            message: `OneDrive aún no estaba sincronizado y falló la sincronización automática: ${syncErr.message}`,
+          });
+        }
       }
 
       // Group pickers by order number:
       const orderPickersMap = new Map<string, Set<string>>();
       const orderTypeMap = new Map<string, string>();
 
-      // User name normalizer
+      const stripAccents = (s: string) =>
+        s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+
+      // User name normalizer (checks dynamic client users first, then built-ins)
       const normalizeUser = (name: string): string => {
-        const clean = name.trim().toLowerCase();
+        const clean = stripAccents(name);
+        if (clean) {
+          const exactDynamic = clientUsers.find(u => {
+            const un = stripAccents(u.username || '');
+            const nm = stripAccents(u.name || '');
+            return un === clean || nm === clean;
+          });
+          if (exactDynamic) return exactDynamic.id;
+
+          const partialDynamic = clientUsers.find(u => {
+            const un = stripAccents(u.username || '');
+            const nm = stripAccents(u.name || '');
+            return (un && (clean.includes(un) || un.includes(clean))) || (nm && (clean.includes(nm) || nm.includes(clean)));
+          });
+          if (partialDynamic) return partialDynamic.id;
+        }
         if (clean.includes('marco')) return 'picker_marco';
         if (clean.includes('hugo')) return 'picker_hugo';
         if (clean.includes('gerardo')) return 'picker_gerardo';
@@ -973,10 +1021,10 @@ async function startServer() {
     }
   });
 
-  // Scheduled background sync loop (runs every 3 minutes)
+  // Scheduled background sync loop (runs every 3 minutes, or whenever cache is still empty)
   setInterval(() => {
-    if (isWithinSyncSchedule()) {
-      console.log('[Auto-Sync Schedule] Operating window active. Triggering background OneDrive sync...');
+    if (!cachedSyncResult || isWithinSyncSchedule()) {
+      console.log('[Auto-Sync Schedule] Operating window active (or cache empty). Triggering background OneDrive sync...');
       performFolderSync().catch(err => {
         console.warn('[Auto-Sync Schedule] OneDrive sync deferred:', err.message);
       });
@@ -985,12 +1033,16 @@ async function startServer() {
     }
   }, 180000); // 3 minutes
 
-  // Initial background sync: delayed 12 seconds so server boots instantly and serves all HTTP requests
-  setTimeout(() => {
+  // Initial background sync: start immediately after boot with retry on transient failure
+  const runInitialSync = (attempt = 1) => {
     performFolderSync().catch(err => {
-      console.warn('Background initial OneDrive sync deferred:', err.message);
+      console.warn(`Background initial OneDrive sync attempt ${attempt} deferred:`, err.message);
+      if (attempt < 5 && !cachedSyncResult) {
+        setTimeout(() => runInitialSync(attempt + 1), 15000);
+      }
     });
-  }, 12000);
+  };
+  setTimeout(() => runInitialSync(1), 500);
 
   const isProd = process.env.NODE_ENV === 'production';
   const distPath = path.resolve('dist');

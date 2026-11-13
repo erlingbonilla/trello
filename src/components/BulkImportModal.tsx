@@ -112,7 +112,10 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
       const res = await fetch('/api/board/bulk-import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: parsedPreview }),
+        body: JSON.stringify({
+          items: parsedPreview,
+          users: allUsers.map(u => ({ id: u.id, username: u.username, name: u.name })),
+        }),
       });
 
       const data = await res.json();
@@ -135,10 +138,12 @@ export const BulkImportModal: React.FC<BulkImportModalProps> = ({
         details: reasons,
       });
 
-      // Clear preview after successful save
-      setTimeout(() => {
-        onClose();
-      }, 2500);
+      // Only auto-close if there were no skipped orders so user can review any warnings
+      if (!data.skippedCount) {
+        setTimeout(() => {
+          onClose();
+        }, 2500);
+      }
     } catch (err: any) {
       setFeedback({
         type: 'error',
